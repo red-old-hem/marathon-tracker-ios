@@ -256,6 +256,88 @@ struct StrengthSuggestion {
     let reason: String
 }
 
+/// 期ごとのセット・回数の目安。テンプレートの種目はそのままに量だけ変える
+enum StrengthVolume {
+    /// フォーム習得。軽めの重量で回数を多めに
+    case intro
+    /// テンプレート通り(主に10回×3セット)
+    case build
+    /// 量を落として筋力を保つ
+    case maintain
+    /// 回復週。重量も下げる
+    case recovery
+
+    var label: String {
+        switch self {
+        case .intro: return "12〜15回×2セット・軽め"
+        case .build: return "8〜10回×3セット・ややきつい"
+        case .maintain: return "10回×2セット・余力を残す"
+        case .recovery: return "2セット・重量を2割下げる"
+        }
+    }
+
+    func apply(_ exercise: StrengthExercise) -> StrengthExercise {
+        var result = exercise
+        switch self {
+        case .intro:
+            result.reps = max(exercise.reps, 12)
+            result.sets = 2
+        case .build:
+            result.sets = max(exercise.sets, 3)
+        case .maintain, .recovery:
+            result.sets = min(exercise.sets, 2)
+        }
+        return result
+    }
+}
+
+struct StrengthWeekPlan {
+    let phase: Int
+    /// その週に行うテンプレート名。同名の重複も可
+    let sessions: [String]
+    let volume: StrengthVolume
+    let tip: String
+}
+
+/// マラソンの18週プランと並ぶ、12週の筋トレプログラム。開始週はユーザーが決める
+enum StrengthProgram {
+    static let phases = ["基礎期", "強化期", "維持期"]
+
+    static let weeks: [StrengthWeekPlan] = [
+        StrengthWeekPlan(phase: 0, sessions: ["全身マシン30分", "体幹・安定性マシン"], volume: .intro,
+                         tip: "まずはマシンの座面と可動域を合わせることから。重量は15回できる軽さで"),
+        StrengthWeekPlan(phase: 0, sessions: ["全身マシン30分", "体幹・安定性マシン"], volume: .intro,
+                         tip: "使った重量を記録しておくと、次週からの目安になります"),
+        StrengthWeekPlan(phase: 0, sessions: ["下半身マシン", "上半身プッシュ"], volume: .intro,
+                         tip: "部位を分け始める週。下半身の日はポイント練習の前日を避けます"),
+        StrengthWeekPlan(phase: 0, sessions: ["下半身マシン", "上半身プル", "体幹・安定性マシン"], volume: .intro,
+                         tip: "週3回に挑戦。2回できれば十分です"),
+        StrengthWeekPlan(phase: 1, sessions: ["下半身マシン", "上半身プッシュ", "上半身プル"], volume: .build,
+                         tip: "強化期の始まり。最後の2回がきつい重量まで上げます"),
+        StrengthWeekPlan(phase: 1, sessions: ["下半身マシン", "上半身プッシュ", "上半身プル"], volume: .build,
+                         tip: "先週と同じ回数をこなせたら、重量を1段階上げます"),
+        StrengthWeekPlan(phase: 1, sessions: ["下半身マシン", "上半身プル", "体幹・安定性マシン"], volume: .build,
+                         tip: "脚の張りが翌日のランに残るなら、レッグプレスを1セット減らします"),
+        StrengthWeekPlan(phase: 1, sessions: ["全身マシン30分", "体幹・安定性マシン"], volume: .recovery,
+                         tip: "回復週。重量を下げて動きを確認するだけで十分です"),
+        StrengthWeekPlan(phase: 2, sessions: ["下半身マシン", "上半身プッシュ", "体幹・安定性マシン"], volume: .maintain,
+                         tip: "維持期は量より継続。強化期の重量を保てれば合格です"),
+        StrengthWeekPlan(phase: 2, sessions: ["下半身マシン", "上半身プル", "体幹・安定性マシン"], volume: .maintain,
+                         tip: "ランの距離が伸びる週は、筋トレを2回に減らしてかまいません"),
+        StrengthWeekPlan(phase: 2, sessions: ["全身マシン30分", "上半身プッシュ"], volume: .maintain,
+                         tip: "全身を短時間で。脚は追い込まないこと"),
+        StrengthWeekPlan(phase: 2, sessions: ["全身マシン30分", "体幹・安定性マシン"], volume: .recovery,
+                         tip: "最終週。使った重量を見返して、次の12週の出発点にします"),
+    ]
+
+    /// 期の量に合わせたテンプレート
+    static func template(named name: String, week: Int) -> StrengthTemplate? {
+        guard let base = StrengthTemplate.preset(named: name), weeks.indices.contains(week) else { return nil }
+        let volume = weeks[week].volume
+        return StrengthTemplate(name: base.name, category: base.category, exercises: base.exercises.map(volume.apply))
+    }
+}
+
 struct RunLog: Codable, Equatable {
     var type: LogType
     var menu: String? = nil
@@ -387,6 +469,8 @@ struct TrackerBackupData: Codable {
     var logs: [String: RunLog]
     var suppressedAutoDays: [String]?
     var nextGoal: NextGoal?
+    /// 筋トレプログラムの開始週(yyyy-MM-dd)。形式バージョン4で追加
+    var strengthProgramStart: String?
 }
 
 enum TrackerBackupError: LocalizedError {
@@ -431,9 +515,21 @@ final class TrackerStore: ObservableObject {
         didSet { persistNextGoal() }
     }
 
+    /// 筋トレ12週プログラムの開始週(月曜)。未開始・中止時は nil
+    @Published private(set) var strengthProgramStart: Date? {
+        didSet {
+            if let strengthProgramStart {
+                userDefaults.set(key(for: strengthProgramStart), forKey: Self.strengthProgramKey)
+            } else {
+                userDefaults.removeObject(forKey: Self.strengthProgramKey)
+            }
+        }
+    }
+
     private static let storageKey = "mt-data"
     private static let suppressedKey = "mt-hk-suppressed"
     private static let nextGoalKey = "mt-next-goal"
+    private static let strengthProgramKey = "mt-strength-program-start"
     private let userDefaults: UserDefaults
     private let keyFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -449,6 +545,9 @@ final class TrackerStore: ObservableObject {
         suppressedAutoDays = Set(userDefaults.stringArray(forKey: Self.suppressedKey) ?? [])
         if let data = userDefaults.data(forKey: Self.nextGoalKey) {
             nextGoal = try? JSONDecoder().decode(NextGoal.self, from: data)
+        }
+        if let startKey = userDefaults.string(forKey: Self.strengthProgramKey) {
+            strengthProgramStart = keyFormatter.date(from: startKey)
         }
         if let data = userDefaults.data(forKey: Self.storageKey),
            let decoded = try? JSONDecoder().decode([String: RunLog].self, from: data) {
@@ -707,6 +806,7 @@ final class TrackerStore: ObservableObject {
     var totalStrengthSessions: Int { logs.values.filter { $0.strength != nil }.count }
 
     /// ランの予定、故障兆候、直近の筋トレ負荷から当日に合うマシンメニューを選ぶ。
+    /// 筋トレプログラム中は今週の未消化メニューを優先する(安全ルールは常に先に効く)。
     func strengthSuggestion(on date: Date) -> StrengthSuggestion {
         if let warning = painWarning() {
             return StrengthSuggestion(
@@ -716,10 +816,42 @@ final class TrackerStore: ObservableObject {
             )
         }
 
+        let avoidLegsReason = legAvoidanceReason(on: date)
+
+        if let week = activeStrengthWeek(of: date) {
+            return programSuggestion(week: week, on: date, avoidLegsReason: avoidLegsReason)
+        }
+
+        if let avoidLegsReason {
+            return upperBodySuggestion(on: date, reason: avoidLegsReason)
+        }
+
+        let weekday = Plan.calendar.component(.weekday, from: date)
+        if weekday == 3 || weekday == 5 {
+            return suggestion(named: "体幹・安定性マシン", on: date, title: "今日の提案", reason: "ラン想定日はフォームを支える体幹を短時間で")
+        }
+
+        guard let lastStrength = logs.sorted(by: { $0.key > $1.key })
+            .first(where: { $0.key < key(for: date) })?.value.strength else {
+            return suggestion(named: "全身マシン30分", on: date, title: "今日の提案", reason: "最初の1回は全身を軽めに動かすメニューです")
+        }
+
+        switch lastStrength.category {
+        case .lower, .full:
+            return upperBodySuggestion(on: date, reason: "前回は\(lastStrength.category.label)でした。部位を分けて回復時間を確保します")
+        case .upper:
+            return suggestion(named: "下半身マシン", on: date, title: "今日の提案", reason: "前回は上半身でした。ランに必要な脚をマシンで補強します")
+        case .core, .mobility:
+            return suggestion(named: "下半身マシン", on: date, title: "今日の提案", reason: "直近は体幹中心でした。下半身を補強する日にします")
+        }
+    }
+
+    /// 脚に負荷をかけるべきでない理由。問題なければ nil
+    private func legAvoidanceReason(on date: Date) -> String? {
         let todayLog = log(on: date)
         let lowerBodyPain: Set<BodyPart> = [.knee, .shin, .sole, .ankle, .hip]
         if !(Set(todayLog?.pains ?? []).intersection(lowerBodyPain)).isEmpty {
-            return upperBodySuggestion(reason: "ランで下半身の痛みを記録しています。脚に負荷をかけない内容です")
+            return "ランで下半身の痛みを記録しています。脚に負荷をかけない内容です"
         }
 
         let recentStrength = (1...2).compactMap { offset -> StrengthLog? in
@@ -732,48 +864,132 @@ final class TrackerStore: ObservableObject {
             (($0.rpe ?? 0) >= 7 || !(Set($0.soreness ?? []).intersection(lowerBodySoreness)).isEmpty)
         }
         if needsLowerBodyRecovery {
-            return upperBodySuggestion(reason: "直近2日間に下半身の高負荷または筋肉痛があります")
+            return "直近2日間に下半身の高負荷または筋肉痛があります"
         }
 
         let menu = todayLog?.menu ?? ""
         let demandingRun = ["ロング", "30km", "ペース走", "レースペース", "本番"].contains { menu.contains($0) }
         if demandingRun {
-            return upperBodySuggestion(reason: "今日は\(menu)のため、脚を使わないマシンメニューです")
+            return "今日は\(menu)のため、脚を使わないマシンメニューです"
         }
 
-        let weekday = Plan.calendar.component(.weekday, from: date)
-        if weekday == 7 {
-            return upperBodySuggestion(reason: "ロング走想定日なので、脚への追加負荷を避けます")
+        if Plan.calendar.component(.weekday, from: date) == 7 {
+            return "ロング走想定日なので、脚への追加負荷を避けます"
         }
-        if weekday == 3 || weekday == 5 {
-            return suggestion(named: "体幹・安定性マシン", title: "今日の提案", reason: "ラン想定日はフォームを支える体幹を短時間で")
-        }
-
-        guard let lastStrength = logs.sorted(by: { $0.key > $1.key })
-            .first(where: { $0.key < key(for: date) })?.value.strength else {
-            return suggestion(named: "全身マシン30分", title: "今日の提案", reason: "最初の1回は全身を軽めに動かすメニューです")
-        }
-
-        switch lastStrength.category {
-        case .lower, .full:
-            return upperBodySuggestion(reason: "前回は\(lastStrength.category.label)でした。部位を分けて回復時間を確保します")
-        case .upper:
-            return suggestion(named: "下半身マシン", title: "今日の提案", reason: "前回は上半身でした。ランに必要な脚をマシンで補強します")
-        case .core, .mobility:
-            return suggestion(named: "下半身マシン", title: "今日の提案", reason: "直近は体幹中心でした。下半身を補強する日にします")
-        }
+        return nil
     }
 
-    private func upperBodySuggestion(reason: String) -> StrengthSuggestion {
+    private func programSuggestion(week: Int, on date: Date, avoidLegsReason: String?) -> StrengthSuggestion {
+        let remaining = remainingStrengthSessions(week: week)
+        guard !remaining.isEmpty else {
+            return StrengthSuggestion(
+                template: nil,
+                title: "今週の筋トレメニューは完了",
+                reason: "今日は休むか、ストレッチ程度で十分です"
+            )
+        }
+
+        let legFree = remaining.filter { name in
+            guard let category = StrengthTemplate.preset(named: name)?.category else { return false }
+            return category != .lower && category != .full
+        }
+        let candidates = avoidLegsReason == nil ? remaining : legFree
+        guard let name = candidates.first else {
+            // 残りが脚を使うメニューだけなら、今日はプログラム外の上半身で埋める
+            return upperBodySuggestion(on: date, reason: "\(avoidLegsReason!)。今週の残りは脚のメニューなので別の日に回します")
+        }
+        return suggestion(
+            named: name,
+            on: date,
+            title: "今週のメニューから",
+            reason: avoidLegsReason ?? "今週の残り\(remaining.count)回のうちの1つです(\(StrengthProgram.weeks[week].volume.label))"
+        )
+    }
+
+    private func upperBodySuggestion(on date: Date, reason: String) -> StrengthSuggestion {
         let lastName = logs.sorted(by: { $0.key > $1.key })
             .compactMap(\.value.strength?.templateName)
             .first
         let name = lastName == "上半身プッシュ" ? "上半身プル" : "上半身プッシュ"
-        return suggestion(named: name, title: "今日の提案", reason: reason)
+        return suggestion(named: name, on: date, title: "今日の提案", reason: reason)
     }
 
-    private func suggestion(named name: String, title: String, reason: String) -> StrengthSuggestion {
-        StrengthSuggestion(template: StrengthTemplate.preset(named: name), title: title, reason: reason)
+    private func suggestion(named name: String, on date: Date, title: String, reason: String) -> StrengthSuggestion {
+        StrengthSuggestion(template: strengthProgramTemplate(named: name, on: date), title: title, reason: reason)
+    }
+}
+
+// MARK: - 筋トレプログラム
+
+extension TrackerStore {
+    /// 指定日を含む週の月曜から12週プログラムを始める(実施中なら開始し直す)
+    func startStrengthProgram(on date: Date) {
+        strengthProgramStart = Self.monday(of: date)
+    }
+
+    func stopStrengthProgram() {
+        strengthProgramStart = nil
+    }
+
+    /// プログラム開始からの週番号。未開始なら nil、開始前は負、終了後は 12 以上
+    func strengthProgramWeek(of date: Date) -> Int? {
+        guard let start = strengthProgramStart else { return nil }
+        let cal = Plan.calendar
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: start), to: cal.startOfDay(for: date)).day ?? 0
+        return Int(floor(Double(days) / 7.0))
+    }
+
+    /// プログラム期間中ならその週番号
+    func activeStrengthWeek(of date: Date) -> Int? {
+        guard let week = strengthProgramWeek(of: date), StrengthProgram.weeks.indices.contains(week) else { return nil }
+        return week
+    }
+
+    func strengthProgramDates(week: Int) -> [Date] {
+        guard let start = strengthProgramStart else { return [] }
+        let cal = Plan.calendar
+        let monday = cal.date(byAdding: .day, value: week * 7, to: start)!
+        return (0..<7).map { cal.date(byAdding: .day, value: $0, to: monday)! }
+    }
+
+    /// テンプレート名ごとの消化回数。マラソンのメニューと同じく名前の一致で数える
+    func strengthMenuDoneCounts(week: Int) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for date in strengthProgramDates(week: week) {
+            if let name = log(on: date)?.strength?.templateName {
+                counts[name, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
+    /// 今週のメニューのうち未消化のもの(プランの並び順)
+    func remainingStrengthSessions(week: Int) -> [String] {
+        guard StrengthProgram.weeks.indices.contains(week) else { return [] }
+        var counts = strengthMenuDoneCounts(week: week)
+        return StrengthProgram.weeks[week].sessions.filter { name in
+            if counts[name, default: 0] > 0 {
+                counts[name, default: 0] -= 1
+                return false
+            }
+            return true
+        }
+    }
+
+    /// プログラム期間中は期の量に合わせたテンプレート、それ以外は既定のテンプレート
+    func strengthProgramTemplate(named name: String, on date: Date) -> StrengthTemplate? {
+        if let week = activeStrengthWeek(of: date) {
+            return StrengthProgram.template(named: name, week: week)
+        }
+        return StrengthTemplate.preset(named: name)
+    }
+
+    static func monday(of date: Date) -> Date {
+        let cal = Plan.calendar
+        let day = cal.startOfDay(for: date)
+        // weekday: 1=日 … 7=土。月曜までの日数を引く
+        let offset = (cal.component(.weekday, from: day) + 5) % 7
+        return cal.date(byAdding: .day, value: -offset, to: day)!
     }
 }
 
@@ -783,12 +999,13 @@ extension TrackerStore {
     func exportBackupData() throws -> Data {
         let payload = TrackerBackupEnvelope(
             app: "okayama-marathon-18-week-trainer-ios",
-            version: 3,
+            version: 4,
             exportedAt: ISO8601DateFormatter().string(from: Date()),
             data: TrackerBackupData(
                 logs: logs,
                 suppressedAutoDays: Array(suppressedAutoDays).sorted(),
-                nextGoal: nextGoal
+                nextGoal: nextGoal,
+                strengthProgramStart: strengthProgramStart.map(key(for:))
             )
         )
         let encoder = JSONEncoder()
@@ -809,6 +1026,7 @@ extension TrackerStore {
 
         suppressedAutoDays = Set((backup.suppressedAutoDays ?? []).filter(Self.isValidDateKey))
         nextGoal = backup.nextGoal
+        strengthProgramStart = backup.strengthProgramStart.flatMap(keyFormatter.date(from:))
         logs = backup.logs
         return backup.logs.count
     }
@@ -822,7 +1040,7 @@ extension TrackerStore {
             return backupData
         }
         if let logs = try? decoder.decode([String: RunLog].self, from: data) {
-            return TrackerBackupData(logs: logs, suppressedAutoDays: nil, nextGoal: nil)
+            return TrackerBackupData(logs: logs, suppressedAutoDays: nil, nextGoal: nil, strengthProgramStart: nil)
         }
         throw TrackerBackupError.invalidFormat
     }
@@ -839,6 +1057,9 @@ extension TrackerStore {
         }
         if let goal = backup.nextGoal, !isValidGoal(goal) {
             throw TrackerBackupError.invalidGoal
+        }
+        if let start = backup.strengthProgramStart, !isValidDateKey(start) {
+            throw TrackerBackupError.invalidDateKey(start)
         }
     }
 

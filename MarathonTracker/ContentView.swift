@@ -36,6 +36,7 @@ struct ContentView: View {
                 PainBanner()
                 TodayCard(menuWeek: menuWeek)
                 StrengthCard()
+                StrengthMenuCard()
                 GaugeCard(currentWeek: currentWeek, menuWeek: menuWeek, inPlan: inPlan)
                 MenuCard(menuWeek: menuWeek)
                 MealCard()
@@ -708,6 +709,163 @@ struct StrengthCard: View {
     }
 }
 
+// MARK: - 筋トレメニュー
+
+struct StrengthMenuCard: View {
+    @EnvironmentObject private var store: TrackerStore
+    @State private var editorTemplate: StrengthTemplate?
+    @State private var confirmingStop = false
+
+    private var today: Date { Plan.calendar.startOfDay(for: Date()) }
+    private var loggedToday: Bool { store.log(on: today)?.strength != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let week = store.strengthProgramWeek(of: today) {
+                if StrengthProgram.weeks.indices.contains(week) {
+                    activeView(week: week)
+                } else if week < 0 {
+                    upcomingView
+                } else {
+                    finishedView
+                }
+            } else {
+                notStartedView
+            }
+        }
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .sheet(item: $editorTemplate) { template in
+            StrengthLogEditor(date: today, initialTemplate: template)
+                .environmentObject(store)
+        }
+        .confirmationDialog("筋トレプログラムをやめますか？", isPresented: $confirmingStop, titleVisibility: .visible) {
+            Button("やめる", role: .destructive) { store.stopStrengthProgram() }
+        } message: {
+            Text("これまでの筋トレ記録は残ります")
+        }
+    }
+
+    private func activeView(week: Int) -> some View {
+        let plan = StrengthProgram.weeks[week]
+        let items = doneFlags(plan: plan, counts: store.strengthMenuDoneCounts(week: week))
+        let doneCount = items.filter(\.done).count
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("今週の筋トレメニュー").font(.subheadline.bold())
+                Spacer()
+                Text("第\(week + 1)週 / \(StrengthProgram.weeks.count)週・\(StrengthProgram.phases[plan.phase])")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Menu {
+                    Button("プログラムをやめる", role: .destructive) { confirmingStop = true }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .frame(width: 30, height: 30)
+                }
+                .accessibilityLabel("筋トレプログラムの操作")
+            }
+
+            HStack {
+                Label(plan.volume.label, systemImage: "dumbbell")
+                    .foregroundStyle(.teal)
+                Spacer()
+                Text("\(doneCount) / \(items.count)回\(doneCount == items.count ? " 完了!" : "")")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                Button {
+                    editorTemplate = store.strengthProgramTemplate(named: item.label, on: today)
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(item.done ? .green : Color(.systemGray4))
+                        Text(item.label)
+                            .strikethrough(item.done)
+                            .foregroundStyle(item.done ? .secondary : .primary)
+                        Spacer()
+                        if !item.done && !loggedToday {
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .font(.subheadline)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                // 今日すでに記録済みなら、上書きを避けて上の筋トレカードから編集してもらう
+                .disabled(item.done || loggedToday)
+                .accessibilityHint(item.done ? "消化済み" : "このメニューで今日の筋トレを記録")
+            }
+
+            Text(plan.tip)
+                .font(.caption)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.teal.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                .foregroundStyle(.teal)
+        }
+    }
+
+    private var notStartedView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("筋トレメニュー").font(.subheadline.bold())
+            Text("基礎期・強化期・維持期の\(StrengthProgram.weeks.count)週プログラム。週2〜3回のマシンメニューを、期に合わせたセット・回数で進めます")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            startButton("今週から始める")
+        }
+    }
+
+    private var upcomingView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("筋トレメニュー").font(.subheadline.bold())
+            if let start = store.strengthProgramStart {
+                Text("\(start.formatted(.dateTime.month().day()))の週から開始します")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var finishedView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("\(StrengthProgram.weeks.count)週プログラム完了 🎉").font(.subheadline.bold())
+            Text("累計 \(store.totalStrengthSessions)回。記録した重量を出発点に、もう一周できます")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                startButton("もう一度始める")
+                Button("終了する") { store.stopStrengthProgram() }
+                    .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private func startButton(_ title: String) -> some View {
+        Button {
+            store.startStrengthProgram(on: today)
+        } label: {
+            Label(title, systemImage: "play.fill")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.teal)
+    }
+
+    private func doneFlags(plan: StrengthWeekPlan, counts: [String: Int]) -> [(label: String, done: Bool)] {
+        var seen: [String: Int] = [:]
+        return plan.sessions.map { name in
+            seen[name, default: 0] += 1
+            return (name, counts[name, default: 0] >= seen[name]!)
+        }
+    }
+}
+
 // MARK: - ゲージ
 
 struct GaugeCard: View {
@@ -1325,7 +1483,9 @@ struct StrengthLogEditor: View {
 
                     Menu {
                         ForEach(StrengthTemplate.presets) { template in
-                            Button(template.name) { apply(template) }
+                            Button(template.name) {
+                                apply(store.strengthProgramTemplate(named: template.name, on: date) ?? template)
+                            }
                         }
                     } label: {
                         Label(templateName ?? "テンプレートを適用", systemImage: "square.on.square")
