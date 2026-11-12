@@ -121,6 +121,8 @@ enum LogType: String, Codable {
     case mini
     /// 痛み警告中の休養。週の最低ラインにカウントする
     case rest
+    /// ランをしなかった日の筋トレ記録。ランの集計には含めない
+    case strength
 }
 
 enum BodyPart: String, Codable, CaseIterable, Identifiable {
@@ -152,6 +154,108 @@ enum Feel: String, Codable, CaseIterable {
     }
 }
 
+enum StrengthCategory: String, Codable, CaseIterable, Identifiable {
+    case upper, lower, core, full, mobility
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .upper: return "上半身"
+        case .lower: return "下半身"
+        case .core: return "体幹"
+        case .full: return "全身"
+        case .mobility: return "モビリティ"
+        }
+    }
+}
+
+enum SorenessArea: String, Codable, CaseIterable, Identifiable {
+    case legs, glutes, back, chest, shoulders, arms, core
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .legs: return "脚"
+        case .glutes: return "臀部"
+        case .back: return "背中"
+        case .chest: return "胸"
+        case .shoulders: return "肩"
+        case .arms: return "腕"
+        case .core: return "体幹"
+        }
+    }
+}
+
+struct StrengthExercise: Codable, Equatable {
+    var name: String
+    /// 自重種目など重量を記録しない場合は nil
+    var weightKg: Double? = nil
+    var reps: Int
+    var sets: Int
+}
+
+struct StrengthLog: Codable, Equatable {
+    var category: StrengthCategory
+    var templateName: String? = nil
+    var exercises: [StrengthExercise]
+    /// 主観的運動強度。1(とても楽)〜10(限界)
+    var rpe: Int? = nil
+    /// 当日の筋肉痛・張り
+    var soreness: [SorenessArea]? = nil
+}
+
+struct StrengthTemplate: Identifiable {
+    let name: String
+    let category: StrengthCategory
+    let exercises: [StrengthExercise]
+
+    var id: String { name }
+
+    /// エニタイムフィットネスで比較的導入例の多いマシン名を基準にする。
+    /// 店舗によって機種・名称は異なるため、適用後に種目名は編集できる。
+    static let presets: [StrengthTemplate] = [
+        StrengthTemplate(name: "下半身マシン", category: .lower, exercises: [
+            StrengthExercise(name: "レッグプレス", reps: 10, sets: 3),
+            StrengthExercise(name: "シーテッド・レッグカール", reps: 10, sets: 3),
+            StrengthExercise(name: "レッグエクステンション", reps: 10, sets: 2),
+            StrengthExercise(name: "カーフレイズマシン", reps: 15, sets: 3),
+        ]),
+        StrengthTemplate(name: "上半身プッシュ", category: .upper, exercises: [
+            StrengthExercise(name: "チェストプレス", reps: 10, sets: 3),
+            StrengthExercise(name: "ショルダープレス", reps: 10, sets: 3),
+            StrengthExercise(name: "ペックフライ", reps: 12, sets: 2),
+        ]),
+        StrengthTemplate(name: "上半身プル", category: .upper, exercises: [
+            StrengthExercise(name: "ラットプルダウン", reps: 10, sets: 3),
+            StrengthExercise(name: "シーテッドロー", reps: 10, sets: 3),
+            StrengthExercise(name: "リアデルト／ペックフライ", reps: 12, sets: 2),
+        ]),
+        StrengthTemplate(name: "体幹・安定性マシン", category: .core, exercises: [
+            StrengthExercise(name: "アブドミナルクランチ", reps: 12, sets: 3),
+            StrengthExercise(name: "ロータリートルソー", reps: 12, sets: 2),
+            StrengthExercise(name: "バックエクステンション", reps: 12, sets: 2),
+        ]),
+        StrengthTemplate(name: "全身マシン30分", category: .full, exercises: [
+            StrengthExercise(name: "レッグプレス", reps: 10, sets: 2),
+            StrengthExercise(name: "チェストプレス", reps: 10, sets: 2),
+            StrengthExercise(name: "ラットプルダウン", reps: 10, sets: 2),
+            StrengthExercise(name: "アブドミナルクランチ", reps: 12, sets: 2),
+        ]),
+    ]
+
+    static func preset(named name: String) -> StrengthTemplate? {
+        presets.first { $0.name == name }
+    }
+}
+
+struct StrengthSuggestion {
+    let template: StrengthTemplate?
+    let title: String
+    let reason: String
+}
+
 struct RunLog: Codable, Equatable {
     var type: LogType
     var menu: String? = nil
@@ -172,6 +276,8 @@ struct RunLog: Codable, Equatable {
     var autoSeconds: Int? = nil
     /// 取り込み済みワークアウトのUUID(昇順)。変更検知に使う
     var workoutIDs: [String]? = nil
+    /// ランと同日に行った筋トレ。旧データとの互換性のため Optional のまま末尾に追加する
+    var strength: StrengthLog? = nil
 }
 
 extension RunLog {
@@ -230,6 +336,13 @@ struct WorkoutDaySummary {
     let workoutIDs: [String]
 }
 
+struct WorkoutApplyResult {
+    let checkedDays: Int
+    let changedDays: Int
+
+    var changed: Bool { changedDays > 0 }
+}
+
 struct WeekStat: Identifiable {
     let week: Int
     let phase: Int
@@ -256,6 +369,52 @@ struct PainWarning: Equatable {
     var severe: Bool { count >= 3 }
 }
 
+/// 完走済みのプランとは別に保持する次のレース目標。
+struct NextGoal: Codable, Equatable {
+    var name: String
+    var date: Date
+    var target: String? = nil
+}
+
+struct TrackerBackupEnvelope: Codable {
+    var app: String
+    var version: Int
+    var exportedAt: String
+    var data: TrackerBackupData
+}
+
+struct TrackerBackupData: Codable {
+    var logs: [String: RunLog]
+    var suppressedAutoDays: [String]?
+    var nextGoal: NextGoal?
+}
+
+enum TrackerBackupError: LocalizedError {
+    case invalidFormat
+    case invalidDateKey(String)
+    case invalidDistance(String)
+    case invalidStrength(String)
+    case invalidGoal
+    case noImportableLogs
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidFormat:
+            return "対応していないバックアップ形式です"
+        case .invalidDateKey(let key):
+            return "日付形式が不正です: \(key)"
+        case .invalidDistance(let key):
+            return "\(key) の距離が不正です"
+        case .invalidStrength(let key):
+            return "\(key) の筋トレ記録が不正です"
+        case .invalidGoal:
+            return "次の目標の内容が不正です"
+        case .noImportableLogs:
+            return "読み込める記録がありません"
+        }
+    }
+}
+
 @MainActor
 final class TrackerStore: ObservableObject {
     @Published private(set) var logs: [String: RunLog] = [:] {
@@ -264,21 +423,34 @@ final class TrackerStore: ObservableObject {
 
     /// ユーザーが明示的に取り消したヘルスケア由来の日。同期で復活させない
     @Published private(set) var suppressedAutoDays: Set<String> = [] {
-        didSet { UserDefaults.standard.set(Array(suppressedAutoDays), forKey: Self.suppressedKey) }
+        didSet { userDefaults.set(Array(suppressedAutoDays), forKey: Self.suppressedKey) }
+    }
+
+    /// 岡山マラソン完走後に設定する、次のレースや挑戦の目標。
+    @Published private(set) var nextGoal: NextGoal? {
+        didSet { persistNextGoal() }
     }
 
     private static let storageKey = "mt-data"
     private static let suppressedKey = "mt-hk-suppressed"
+    private static let nextGoalKey = "mt-next-goal"
+    private let userDefaults: UserDefaults
     private let keyFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Plan.calendar
+        f.timeZone = Plan.calendar.timeZone
         f.dateFormat = "yyyy-MM-dd"
         return f
     }()
 
-    init() {
-        suppressedAutoDays = Set(UserDefaults.standard.stringArray(forKey: Self.suppressedKey) ?? [])
-        if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+    init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+        suppressedAutoDays = Set(userDefaults.stringArray(forKey: Self.suppressedKey) ?? [])
+        if let data = userDefaults.data(forKey: Self.nextGoalKey) {
+            nextGoal = try? JSONDecoder().decode(NextGoal.self, from: data)
+        }
+        if let data = userDefaults.data(forKey: Self.storageKey),
            let decoded = try? JSONDecoder().decode([String: RunLog].self, from: data) {
             let migrated = Self.migrateLegacyAutoLogs(decoded)
             logs = migrated
@@ -301,8 +473,26 @@ final class TrackerStore: ObservableObject {
 
     private func persist() {
         if let data = try? JSONEncoder().encode(logs) {
-            UserDefaults.standard.set(data, forKey: Self.storageKey)
+            userDefaults.set(data, forKey: Self.storageKey)
         }
+    }
+
+    private func persistNextGoal() {
+        guard let nextGoal else {
+            userDefaults.removeObject(forKey: Self.nextGoalKey)
+            return
+        }
+        if let data = try? JSONEncoder().encode(nextGoal) {
+            userDefaults.set(data, forKey: Self.nextGoalKey)
+        }
+    }
+
+    func setNextGoal(_ goal: NextGoal) {
+        nextGoal = goal
+    }
+
+    func clearNextGoal() {
+        nextGoal = nil
     }
 
     func key(for date: Date) -> String { keyFormatter.string(from: date) }
@@ -322,17 +512,61 @@ final class TrackerStore: ObservableObject {
         logs.removeValue(forKey: k)
     }
 
+    /// ラン記録を削除する。筋トレが同日にあれば筋トレだけを残す。
+    func removeRunRecord(on date: Date) {
+        let k = key(for: date)
+        guard let log = logs[k], log.type != .strength else { return }
+        if log.auto == true || log.autoKm != nil {
+            suppressedAutoDays.insert(k)
+        }
+        if let strength = log.strength {
+            logs[k] = RunLog(type: .strength, strength: strength)
+        } else {
+            logs.removeValue(forKey: k)
+        }
+    }
+
+    func recordStrength(_ strength: StrengthLog, on date: Date) {
+        let k = key(for: date)
+        if var log = logs[k] {
+            log.strength = strength
+            logs[k] = log
+        } else {
+            logs[k] = RunLog(type: .strength, strength: strength)
+        }
+    }
+
+    /// 筋トレだけの日を削除する場合は、その日のログ自体を取り除く。
+    func removeStrength(on date: Date) {
+        let k = key(for: date)
+        guard var log = logs[k] else { return }
+        log.strength = nil
+        if log.type == .strength {
+            if log.auto == true || log.autoKm != nil {
+                log.type = .run
+                log.menu = nextMenu(on: date)
+                logs[k] = log
+            } else {
+                logs.removeValue(forKey: k)
+            }
+        } else {
+            logs[k] = log
+        }
+    }
+
     /// ヘルスケアの日次集計を取り込む。手動入力(type / menu / km / pains / feel)は変更しない。
     /// 毎回ソースから日単位で再計算するので冪等。workoutIDs は無駄な書き込みを避ける変更検知に使う。
     /// ワークアウトが存在する日しか走査しないため、権限剥奪や削除で既存の autoKm が消えることはない。
     @discardableResult
-    func applyWorkouts(_ summaries: [WorkoutDaySummary]) -> Bool {
+    func applyWorkouts(_ summaries: [WorkoutDaySummary]) -> WorkoutApplyResult {
         var next = logs
-        var changed = false
+        var checkedDays = 0
+        var changedDays = 0
 
         for summary in summaries.sorted(by: { $0.date < $1.date }) {
             let k = key(for: summary.date)
             if suppressedAutoDays.contains(k) { continue }
+            checkedDays += 1
             let ids = summary.workoutIDs.sorted()
 
             if var existing = next[k] {
@@ -344,6 +578,11 @@ final class TrackerStore: ObservableObject {
                 // type / menu / km / pains / feel は触らない。.mini も .rest も
                 // ユーザーの申告のまま残し、距離と時間だけが正しくなる。
                 // nil への降格もしない(距離なしワークアウトで既存値を失わないため)
+                // ただし筋トレだけの日はランの実績が確定したので .run に昇格する。
+                if existing.type == .strength {
+                    existing.type = .run
+                    existing.menu = nextMenu(on: summary.date, in: next)
+                }
                 existing.autoKm = summary.km ?? existing.autoKm
                 existing.autoSeconds = summary.seconds ?? existing.autoSeconds
                 existing.workoutIDs = ids
@@ -358,12 +597,12 @@ final class TrackerStore: ObservableObject {
                     workoutIDs: ids
                 )
             }
-            changed = true
+            changedDays += 1
         }
 
         // 代入は1回だけ = 永続化も1回
-        if changed { logs = next }
-        return changed
+        if changedDays > 0 { logs = next }
+        return WorkoutApplyResult(checkedDays: checkedDays, changedDays: changedDays)
     }
 
     // MARK: - 週の計算
@@ -383,6 +622,7 @@ final class TrackerStore: ObservableObject {
     // 作業中の辞書を見ないと全日に同じメニューが割り当たってしまう。
     private func weekLogs(_ week: Int, in source: [String: RunLog]) -> [RunLog] {
         weekDates(week).compactMap { source[key(for: $0)] }
+            .filter { $0.type != .strength }
     }
 
     func weekLogs(_ week: Int) -> [RunLog] { weekLogs(week, in: logs) }
@@ -463,7 +703,171 @@ final class TrackerStore: ObservableObject {
         return count
     }
 
-    var totalRuns: Int { logs.values.filter { $0.type != .rest }.count }
+    var totalRuns: Int { logs.values.filter { $0.type == .run || $0.type == .mini }.count }
+    var totalStrengthSessions: Int { logs.values.filter { $0.strength != nil }.count }
+
+    /// ランの予定、故障兆候、直近の筋トレ負荷から当日に合うマシンメニューを選ぶ。
+    func strengthSuggestion(on date: Date) -> StrengthSuggestion {
+        if let warning = painWarning() {
+            return StrengthSuggestion(
+                template: nil,
+                title: "今日は筋トレも休養",
+                reason: "\(warning.part.label)の痛みが続いています。回復を優先しましょう"
+            )
+        }
+
+        let todayLog = log(on: date)
+        let lowerBodyPain: Set<BodyPart> = [.knee, .shin, .sole, .ankle, .hip]
+        if !(Set(todayLog?.pains ?? []).intersection(lowerBodyPain)).isEmpty {
+            return upperBodySuggestion(reason: "ランで下半身の痛みを記録しています。脚に負荷をかけない内容です")
+        }
+
+        let recentStrength = (1...2).compactMap { offset -> StrengthLog? in
+            guard let day = Plan.calendar.date(byAdding: .day, value: -offset, to: date) else { return nil }
+            return log(on: day)?.strength
+        }
+        let lowerBodySoreness: Set<SorenessArea> = [.legs, .glutes]
+        let needsLowerBodyRecovery = recentStrength.contains {
+            ($0.category == .lower || $0.category == .full) &&
+            (($0.rpe ?? 0) >= 7 || !(Set($0.soreness ?? []).intersection(lowerBodySoreness)).isEmpty)
+        }
+        if needsLowerBodyRecovery {
+            return upperBodySuggestion(reason: "直近2日間に下半身の高負荷または筋肉痛があります")
+        }
+
+        let menu = todayLog?.menu ?? ""
+        let demandingRun = ["ロング", "30km", "ペース走", "レースペース", "本番"].contains { menu.contains($0) }
+        if demandingRun {
+            return upperBodySuggestion(reason: "今日は\(menu)のため、脚を使わないマシンメニューです")
+        }
+
+        let weekday = Plan.calendar.component(.weekday, from: date)
+        if weekday == 7 {
+            return upperBodySuggestion(reason: "ロング走想定日なので、脚への追加負荷を避けます")
+        }
+        if weekday == 3 || weekday == 5 {
+            return suggestion(named: "体幹・安定性マシン", title: "今日の提案", reason: "ラン想定日はフォームを支える体幹を短時間で")
+        }
+
+        guard let lastStrength = logs.sorted(by: { $0.key > $1.key })
+            .first(where: { $0.key < key(for: date) })?.value.strength else {
+            return suggestion(named: "全身マシン30分", title: "今日の提案", reason: "最初の1回は全身を軽めに動かすメニューです")
+        }
+
+        switch lastStrength.category {
+        case .lower, .full:
+            return upperBodySuggestion(reason: "前回は\(lastStrength.category.label)でした。部位を分けて回復時間を確保します")
+        case .upper:
+            return suggestion(named: "下半身マシン", title: "今日の提案", reason: "前回は上半身でした。ランに必要な脚をマシンで補強します")
+        case .core, .mobility:
+            return suggestion(named: "下半身マシン", title: "今日の提案", reason: "直近は体幹中心でした。下半身を補強する日にします")
+        }
+    }
+
+    private func upperBodySuggestion(reason: String) -> StrengthSuggestion {
+        let lastName = logs.sorted(by: { $0.key > $1.key })
+            .compactMap(\.value.strength?.templateName)
+            .first
+        let name = lastName == "上半身プッシュ" ? "上半身プル" : "上半身プッシュ"
+        return suggestion(named: name, title: "今日の提案", reason: reason)
+    }
+
+    private func suggestion(named name: String, title: String, reason: String) -> StrengthSuggestion {
+        StrengthSuggestion(template: StrengthTemplate.preset(named: name), title: title, reason: reason)
+    }
+}
+
+// MARK: - バックアップ
+
+extension TrackerStore {
+    func exportBackupData() throws -> Data {
+        let payload = TrackerBackupEnvelope(
+            app: "okayama-marathon-18-week-trainer-ios",
+            version: 3,
+            exportedAt: ISO8601DateFormatter().string(from: Date()),
+            data: TrackerBackupData(
+                logs: logs,
+                suppressedAutoDays: Array(suppressedAutoDays).sorted(),
+                nextGoal: nextGoal
+            )
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(payload)
+    }
+
+    func importPreviewCount(from data: Data) throws -> Int {
+        let backup = try Self.decodeBackupData(from: data)
+        try Self.validateBackup(backup)
+        return backup.logs.count
+    }
+
+    @discardableResult
+    func importBackupData(_ data: Data) throws -> Int {
+        let backup = try Self.decodeBackupData(from: data)
+        try Self.validateBackup(backup)
+
+        suppressedAutoDays = Set((backup.suppressedAutoDays ?? []).filter(Self.isValidDateKey))
+        nextGoal = backup.nextGoal
+        logs = backup.logs
+        return backup.logs.count
+    }
+
+    private static func decodeBackupData(from data: Data) throws -> TrackerBackupData {
+        let decoder = JSONDecoder()
+        if let envelope = try? decoder.decode(TrackerBackupEnvelope.self, from: data) {
+            return envelope.data
+        }
+        if let backupData = try? decoder.decode(TrackerBackupData.self, from: data) {
+            return backupData
+        }
+        if let logs = try? decoder.decode([String: RunLog].self, from: data) {
+            return TrackerBackupData(logs: logs, suppressedAutoDays: nil, nextGoal: nil)
+        }
+        throw TrackerBackupError.invalidFormat
+    }
+
+    private static func validateBackup(_ backup: TrackerBackupData) throws {
+        guard !backup.logs.isEmpty else { throw TrackerBackupError.noImportableLogs }
+        for (key, log) in backup.logs {
+            guard isValidDateKey(key) else { throw TrackerBackupError.invalidDateKey(key) }
+            if let km = log.km, !isValidDistance(km) { throw TrackerBackupError.invalidDistance(key) }
+            if let autoKm = log.autoKm, !isValidDistance(autoKm) { throw TrackerBackupError.invalidDistance(key) }
+            if let strength = log.strength, !isValidStrength(strength) {
+                throw TrackerBackupError.invalidStrength(key)
+            }
+        }
+        if let goal = backup.nextGoal, !isValidGoal(goal) {
+            throw TrackerBackupError.invalidGoal
+        }
+    }
+
+    private static func isValidDistance(_ value: Double) -> Bool {
+        value.isFinite && value >= 0
+    }
+
+    private static func isValidStrength(_ value: StrengthLog) -> Bool {
+        guard value.rpe == nil || (1...10).contains(value.rpe!), !value.exercises.isEmpty else { return false }
+        return value.exercises.allSatisfy {
+            !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            $0.reps > 0 && $0.sets > 0 &&
+            ($0.weightKg == nil || ($0.weightKg!.isFinite && $0.weightKg! >= 0))
+        }
+    }
+
+    private static func isValidGoal(_ value: NextGoal) -> Bool {
+        !value.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        value.target?.count ?? 0 <= 80
+    }
+
+    private static func isValidDateKey(_ value: String) -> Bool {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Plan.calendar
+        formatter.dateFormat = "yyyy-MM-dd"
+        guard let date = formatter.date(from: value) else { return false }
+        return formatter.string(from: date) == value
+    }
 }
 
 // MARK: - 距離の集計
