@@ -26,3 +26,19 @@ targets:
         SWIFT_VERSION: "5.9"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         DEVELOPMENT_LANGUAGE: ja
+        # ここに書かないと xcodegen generate のたびに
+        # Xcode で選んだ Team が消え、実機ビルドが
+        # 「requires a development team」で失敗する
+        DEVELOPMENT_TEAM: V677493FKX
+        CODE_SIGN_STYLE: Automatic
+  MarathonTrackerTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [MarathonTrackerTests]
+    dependencies:
+      - target: MarathonTracker
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.eiichi.MarathonTrackerTests
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: YES
