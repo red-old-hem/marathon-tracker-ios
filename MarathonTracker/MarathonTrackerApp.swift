@@ -12,6 +12,7 @@ struct MarathonTrackerApp: App {
                 .onAppear {
                     NotificationManager.requestAuthorization()
                     NotificationManager.reschedule(store: store)
+                    Task { await HealthKitManager.shared.syncWorkouts(into: store) }
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
