@@ -869,6 +869,20 @@ final class TrackerStore: ObservableObject {
     var totalRuns: Int { logs.values.filter { $0.type == .run || $0.type == .mini }.count }
     var totalStrengthSessions: Int { logs.values.filter { $0.strength != nil }.count }
 
+    /// ラン画面用のログ。筋トレだけの日(.strength)はランの記録なしとして nil を返す
+    func runLog(on date: Date) -> RunLog? {
+        guard let log = log(on: date), log.type != .strength else { return nil }
+        return log
+    }
+
+    /// 筋トレを記録した日(新しい順)
+    func recentStrengthDays(limit: Int = 10) -> [Date] {
+        logs.filter { $0.value.strength != nil }
+            .keys.sorted(by: >)
+            .prefix(limit)
+            .compactMap(dailyDate)
+    }
+
     /// ランの予定、故障兆候、直近の筋トレ負荷から当日に合うマシンメニューを選ぶ。
     /// 筋トレプログラム中は今週の未消化メニューを優先する(安全ルールは常に先に効く)。
     func strengthSuggestion(on date: Date) -> StrengthSuggestion {

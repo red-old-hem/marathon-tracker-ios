@@ -4,6 +4,7 @@ import UserNotifications
 enum AppTab: Hashable {
     case daily
     case run
+    case strength
     case review
 }
 
@@ -22,6 +23,9 @@ struct MarathonTrackerApp: App {
                 ContentView()
                     .tabItem { Label("ラン", systemImage: "figure.run") }
                     .tag(AppTab.run)
+                StrengthView()
+                    .tabItem { Label("筋トレ", systemImage: "dumbbell") }
+                    .tag(AppTab.strength)
                 WeeklyReviewView()
                     .tabItem { Label("振り返り", systemImage: "calendar") }
                     .tag(AppTab.review)

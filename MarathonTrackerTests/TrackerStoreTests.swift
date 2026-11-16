@@ -88,6 +88,19 @@ final class TrackerStoreTests: XCTestCase {
         XCTAssertEqual(suggestion.title, "今日は筋トレも休養")
     }
 
+    func testStrengthOnlyDayIsHiddenFromRunScreen() {
+        let store = makeStore()
+        let strengthDay = Plan.date(2026, 11, 16)
+        let bothDay = Plan.date(2026, 11, 17)
+        store.recordStrength(strength(.upper), on: strengthDay)
+        store.record(RunLog(type: .run, km: 5), on: bothDay)
+        store.recordStrength(strength(.lower), on: bothDay)
+
+        XCTAssertNil(store.runLog(on: strengthDay))
+        XCTAssertEqual(store.runLog(on: bothDay)?.km, 5)
+        XCTAssertEqual(store.recentStrengthDays(), [bothDay, strengthDay])
+    }
+
     private func isolatedDefaults() -> UserDefaults {
         let name = "MarathonTrackerTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!

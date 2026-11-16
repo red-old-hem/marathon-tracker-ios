@@ -6,7 +6,7 @@
 
 ## 特徴
 
-画面は「今日／ラン／振り返り」の3タブです。「今日」と「振り返り」は、Web版の「日々をつくる」から統合した毎日の記録です。
+画面は「今日／ラン／筋トレ／振り返り」の4タブです。「今日」と「振り返り」は、Web版の「日々をつくる」から統合した毎日の記録です。筋トレはランと別のタブで記録・確認します(データは同じ日の記録に保存されます)。
 
 ### 毎日の記録(今日タブ)
 
@@ -99,6 +99,7 @@ xcodebuild -project MarathonTracker.xcodeproj -scheme MarathonTracker \
 | `DailyModels.swift` | 食事・習慣・体調・30秒メモ・週次レビューのモデルと操作・週集計 |
 | `DailyView.swift` | 今日タブ |
 | `WeeklyReviewView.swift` | 振り返りタブ |
+| `StrengthView.swift` | 筋トレタブ(今日の筋トレ、12週メニュー、最近の筋トレと過去日の記録) |
 | `HabitLifeImport.swift` | 日々をつくる(Web版)の書き出しJSONの取り込み |
 
 記録は端末内の `UserDefaults` にのみ保存され、外部に送信されません。
