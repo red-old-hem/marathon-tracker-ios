@@ -1004,7 +1004,7 @@ struct HealthCard: View {
                     ProgressView()
                 } else if health.isEnabled {
                     Button {
-                        Task { await health.syncWorkouts(into: store) }
+                        Task { await health.syncAll(into: store) }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.subheadline.bold())
@@ -1017,7 +1017,7 @@ struct HealthCard: View {
                         requesting = true
                         Task {
                             if await health.enable() {
-                                await health.syncWorkouts(into: store)
+                                await health.syncAll(into: store)
                             }
                             requesting = false
                         }
@@ -1649,6 +1649,8 @@ struct DataBackupCard: View {
 
     @State private var isExporting = false
     @State private var isImporting = false
+    /// 同じビューに fileImporter を2つ付けると片方しか動かないので、1つを使い分ける
+    @State private var importsHabitLife = false
     @State private var exportData = Data()
     @State private var exportFilename = "marathon-tracker-backup"
     @State private var pendingImportData: Data?
@@ -1671,6 +1673,7 @@ struct DataBackupCard: View {
                 .tint(.green)
 
                 Button {
+                    importsHabitLife = false
                     isImporting = true
                 } label: {
                     Label("読み込む", systemImage: "tray.and.arrow.down")
@@ -1678,6 +1681,15 @@ struct DataBackupCard: View {
                 }
                 .buttonStyle(.bordered)
             }
+
+            Button {
+                importsHabitLife = true
+                isImporting = true
+            } label: {
+                Label("日々をつくるから取り込む", systemImage: "arrow.triangle.merge")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
 
             Text(statusText.isEmpty ? "記録は端末内に保存されています。機種変更前に書き出してください" : statusText)
                 .font(.caption)
@@ -1700,7 +1712,11 @@ struct DataBackupCard: View {
             }
         }
         .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json]) { result in
-            prepareImport(result)
+            if importsHabitLife {
+                importHabitLife(result)
+            } else {
+                prepareImport(result)
+            }
         }
         .alert("読み込み確認", isPresented: $showingImportConfirm) {
             Button("上書き", role: .destructive) {
@@ -1711,7 +1727,7 @@ struct DataBackupCard: View {
                 setStatus("読み込みをキャンセルしました")
             }
         } message: {
-            Text("現在の記録と次の目標を、読み込んだ\(pendingImportCount)件の記録で上書きします。")
+            Text("現在の記録・次の目標・日々の記録を、読み込んだ\(pendingImportCount)件の記録で上書きします。")
         }
     }
 
@@ -1739,6 +1755,22 @@ struct DataBackupCard: View {
             showingImportConfirm = true
         } catch {
             setStatus("読み込みに失敗しました: \(error.localizedDescription)", isError: true)
+        }
+    }
+
+    /// Web版の書き出しは今の記録に足すだけなので、確認なしで取り込む
+    private func importHabitLife(_ result: Result<URL, Error>) {
+        do {
+            let url = try result.get()
+            let allowed = url.startAccessingSecurityScopedResource()
+            defer {
+                if allowed { url.stopAccessingSecurityScopedResource() }
+            }
+            let imported = try store.importHabitLife(Data(contentsOf: url))
+            NotificationManager.reschedule(store: store)
+            setStatus(imported.summary)
+        } catch {
+            setStatus("取り込みに失敗しました: \(error.localizedDescription)", isError: true)
         }
     }
 

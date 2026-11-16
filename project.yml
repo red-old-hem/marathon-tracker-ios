@@ -15,7 +15,7 @@ targets:
         CFBundleDevelopmentRegion: ja
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
-        NSHealthShareUsageDescription: ランニングのワークアウトを読み取り、走った日を自動でチェックインするために使用します
+        NSHealthShareUsageDescription: ランニングのワークアウトから走った日を自動でチェックインし、体重・睡眠・歩数・安静時心拍を体調の記録に表示するために使用します
     entitlements:
       path: MarathonTracker/MarathonTracker.entitlements
       properties:

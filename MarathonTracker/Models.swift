@@ -471,6 +471,19 @@ struct TrackerBackupData: Codable {
     var nextGoal: NextGoal?
     /// 筋トレプログラムの開始週(yyyy-MM-dd)。形式バージョン4で追加
     var strengthProgramStart: String?
+    // 以下は形式バージョン5で追加(日々をつくるから統合した記録)。旧バックアップでは nil
+    var dailyEntries: [String: DailyEntry]? = nil
+    var habits: [String: Habit]? = nil
+    var habitChecks: [String: HabitCheck]? = nil
+    var metrics: [String: DailyMetric]? = nil
+    var workNotes: [String: WorkNote]? = nil
+    var weeklyReviews: [String: WeeklyReview]? = nil
+
+    /// 日々の記録の件数(ラン記録以外)
+    var dailyRecordCount: Int {
+        (dailyEntries?.count ?? 0) + (habits?.count ?? 0) + (habitChecks?.count ?? 0) +
+        (metrics?.count ?? 0) + (workNotes?.count ?? 0) + (weeklyReviews?.count ?? 0)
+    }
 }
 
 enum TrackerBackupError: LocalizedError {
@@ -526,7 +539,38 @@ final class TrackerStore: ObservableObject {
         }
     }
 
+    // 日々の記録(日々をつくるから統合)。種類ごとに別キーに保存し、1種類の読み込み失敗が他に波及しないようにする。
+    // 操作は DailyModels.swift の extension に置くため、ここでは set を private にしない
+    @Published var dailyEntries: [String: DailyEntry] = [:] {
+        didSet { save(dailyEntries, forKey: Self.dailyEntriesKey) }
+    }
+    @Published var habits: [String: Habit] = [:] {
+        didSet { save(habits, forKey: Self.habitsKey) }
+    }
+    /// キーは HabitCheck.storageKey(日付|習慣ID)
+    @Published var habitChecks: [String: HabitCheck] = [:] {
+        didSet { save(habitChecks, forKey: Self.habitChecksKey) }
+    }
+    /// キーは日付(yyyy-MM-dd)
+    @Published var metrics: [String: DailyMetric] = [:] {
+        didSet { save(metrics, forKey: Self.metricsKey) }
+    }
+    /// キーは日付(yyyy-MM-dd)
+    @Published var workNotes: [String: WorkNote] = [:] {
+        didSet { save(workNotes, forKey: Self.workNotesKey) }
+    }
+    /// キーは週の月曜(yyyy-MM-dd)
+    @Published var weeklyReviews: [String: WeeklyReview] = [:] {
+        didSet { save(weeklyReviews, forKey: Self.weeklyReviewsKey) }
+    }
+
     private static let storageKey = "mt-data"
+    private static let dailyEntriesKey = "mt-daily-entries"
+    private static let habitsKey = "mt-habits"
+    private static let habitChecksKey = "mt-habit-checks"
+    private static let metricsKey = "mt-metrics"
+    private static let workNotesKey = "mt-work-notes"
+    private static let weeklyReviewsKey = "mt-weekly-reviews"
     private static let suppressedKey = "mt-hk-suppressed"
     private static let nextGoalKey = "mt-next-goal"
     private static let strengthProgramKey = "mt-strength-program-start"
@@ -549,6 +593,12 @@ final class TrackerStore: ObservableObject {
         if let startKey = userDefaults.string(forKey: Self.strengthProgramKey) {
             strengthProgramStart = keyFormatter.date(from: startKey)
         }
+        dailyEntries = load(forKey: Self.dailyEntriesKey)
+        habits = load(forKey: Self.habitsKey)
+        habitChecks = load(forKey: Self.habitChecksKey)
+        metrics = load(forKey: Self.metricsKey)
+        workNotes = load(forKey: Self.workNotesKey)
+        weeklyReviews = load(forKey: Self.weeklyReviewsKey)
         if let data = userDefaults.data(forKey: Self.storageKey),
            let decoded = try? JSONDecoder().decode([String: RunLog].self, from: data) {
             let migrated = Self.migrateLegacyAutoLogs(decoded)
@@ -576,6 +626,17 @@ final class TrackerStore: ObservableObject {
         }
     }
 
+    private func save<T: Encodable>(_ value: T, forKey key: String) {
+        if let data = try? JSONEncoder().encode(value) {
+            userDefaults.set(data, forKey: key)
+        }
+    }
+
+    private func load<T: Decodable>(forKey key: String) -> [String: T] {
+        guard let data = userDefaults.data(forKey: key) else { return [:] }
+        return (try? JSONDecoder().decode([String: T].self, from: data)) ?? [:]
+    }
+
     private func persistNextGoal() {
         guard let nextGoal else {
             userDefaults.removeObject(forKey: Self.nextGoalKey)
@@ -595,6 +656,9 @@ final class TrackerStore: ObservableObject {
     }
 
     func key(for date: Date) -> String { keyFormatter.string(from: date) }
+
+    /// key(for:) の逆変換。不正な文字列は nil
+    func dailyDate(_ key: String) -> Date? { keyFormatter.date(from: key) }
 
     func log(on date: Date) -> RunLog? { logs[key(for: date)] }
 
@@ -999,13 +1063,19 @@ extension TrackerStore {
     func exportBackupData() throws -> Data {
         let payload = TrackerBackupEnvelope(
             app: "okayama-marathon-18-week-trainer-ios",
-            version: 4,
+            version: 5,
             exportedAt: ISO8601DateFormatter().string(from: Date()),
             data: TrackerBackupData(
                 logs: logs,
                 suppressedAutoDays: Array(suppressedAutoDays).sorted(),
                 nextGoal: nextGoal,
-                strengthProgramStart: strengthProgramStart.map(key(for:))
+                strengthProgramStart: strengthProgramStart.map(key(for:)),
+                dailyEntries: dailyEntries,
+                habits: habits,
+                habitChecks: habitChecks,
+                metrics: metrics,
+                workNotes: workNotes,
+                weeklyReviews: weeklyReviews
             )
         )
         let encoder = JSONEncoder()
@@ -1016,7 +1086,7 @@ extension TrackerStore {
     func importPreviewCount(from data: Data) throws -> Int {
         let backup = try Self.decodeBackupData(from: data)
         try Self.validateBackup(backup)
-        return backup.logs.count
+        return backup.logs.count + backup.dailyRecordCount
     }
 
     @discardableResult
@@ -1027,8 +1097,15 @@ extension TrackerStore {
         suppressedAutoDays = Set((backup.suppressedAutoDays ?? []).filter(Self.isValidDateKey))
         nextGoal = backup.nextGoal
         strengthProgramStart = backup.strengthProgramStart.flatMap(keyFormatter.date(from:))
+        // v4以前のバックアップには日々の記録が無い。上書き読み込みなので、無ければ空にする
+        dailyEntries = backup.dailyEntries ?? [:]
+        habits = backup.habits ?? [:]
+        habitChecks = backup.habitChecks ?? [:]
+        metrics = backup.metrics ?? [:]
+        workNotes = backup.workNotes ?? [:]
+        weeklyReviews = backup.weeklyReviews ?? [:]
         logs = backup.logs
-        return backup.logs.count
+        return backup.logs.count + backup.dailyRecordCount
     }
 
     private static func decodeBackupData(from data: Data) throws -> TrackerBackupData {
@@ -1046,7 +1123,15 @@ extension TrackerStore {
     }
 
     private static func validateBackup(_ backup: TrackerBackupData) throws {
-        guard !backup.logs.isEmpty else { throw TrackerBackupError.noImportableLogs }
+        guard !backup.logs.isEmpty || backup.dailyRecordCount > 0 else { throw TrackerBackupError.noImportableLogs }
+        let dailyDays = (backup.dailyEntries?.values.map(\.day) ?? []) +
+            (backup.habitChecks?.values.map(\.day) ?? []) +
+            (backup.metrics?.values.map(\.day) ?? []) +
+            (backup.workNotes?.values.map(\.day) ?? []) +
+            (backup.weeklyReviews?.values.map(\.weekStart) ?? [])
+        if let bad = dailyDays.first(where: { !isValidDateKey($0) }) {
+            throw TrackerBackupError.invalidDateKey(bad)
+        }
         for (key, log) in backup.logs {
             guard isValidDateKey(key) else { throw TrackerBackupError.invalidDateKey(key) }
             if let km = log.km, !isValidDistance(km) { throw TrackerBackupError.invalidDistance(key) }
