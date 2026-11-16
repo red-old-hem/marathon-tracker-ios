@@ -35,8 +35,6 @@ struct ContentView: View {
                 if isPostRace { NextGoalCard() }
                 PainBanner()
                 TodayCard(menuWeek: menuWeek)
-                StrengthCard()
-                StrengthMenuCard()
                 GaugeCard(currentWeek: currentWeek, menuWeek: menuWeek, inPlan: inPlan)
                 MenuCard(menuWeek: menuWeek)
                 MealCard()
@@ -364,7 +362,8 @@ struct TodayCard: View {
     @State private var showingPainEditor = false
 
     private var today: Date { Plan.calendar.startOfDay(for: Date()) }
-    private var todayLog: RunLog? { store.log(on: today) }
+    /// 筋トレは筋トレタブで扱う。筋トレだけの日はランの記録なしとして表示する
+    private var todayLog: RunLog? { store.runLog(on: today) }
 
     private var dateLabel: String {
         let f = DateFormatter()
@@ -394,7 +393,7 @@ struct TodayCard: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
-                if log.type != .rest && log.type != .strength {
+                if log.type != .rest {
                     if showingPainEditor {
                         PainChips(selection: $selectedPains)
                         Button {
@@ -416,20 +415,13 @@ struct TodayCard: View {
                         .frame(minHeight: 40)
                     }
                 }
-                if log.type == .strength {
-                    Button("ランも記録する") { prepareForm() }
-                        .font(.footnote)
-                        .foregroundStyle(.green)
-                        .frame(minHeight: 44)
-                } else {
-                    Button("今日のラン記録を取り消す") {
-                        store.removeRunRecord(on: today)
-                        NotificationManager.reschedule(store: store)
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(minHeight: 44)
+                Button("今日のラン記録を取り消す") {
+                    store.removeRunRecord(on: today)
+                    NotificationManager.reschedule(store: store)
                 }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(minHeight: 44)
             } else if showingForm {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("どのメニュー?").font(.caption).foregroundStyle(.secondary)
@@ -554,13 +546,10 @@ struct TodayCard: View {
 
     private func statusText(_ log: RunLog) -> String {
         if log.type == .rest {
-            return "痛みで休んだ。正しい判断、今日も達成" + (log.strength == nil ? "" : " / 筋トレ")
+            return "痛みで休んだ。正しい判断、今日も達成"
         }
         if log.type == .mini {
-            return "5分だけでも走った。今日も勝ち" + (log.strength == nil ? "" : " / 筋トレ")
-        }
-        if log.type == .strength {
-            return "筋トレ \(log.strength?.templateName ?? log.strength?.category.label ?? "")"
+            return "5分だけでも走った。今日も勝ち"
         }
         var text = "走った"
         if let menu = log.menu { text += " \(menu)" }
@@ -576,12 +565,11 @@ struct TodayCard: View {
             }
         }
         if log.hasHealthDistance { text += "(ヘルスケア)" }
-        if log.strength != nil { text += " / 筋トレ" }
         return text
     }
 
     private func preservingAttachedFields(_ log: RunLog) -> RunLog {
-        guard let existing = todayLog else { return log }
+        guard let existing = store.log(on: today) else { return log }
         var next = log
         next.auto = existing.auto
         next.autoKm = existing.autoKm
@@ -589,280 +577,6 @@ struct TodayCard: View {
         next.workoutIDs = existing.workoutIDs
         next.strength = existing.strength
         return next
-    }
-}
-
-// MARK: - 筋トレ
-
-struct StrengthCard: View {
-    @EnvironmentObject private var store: TrackerStore
-    @State private var showingEditor = false
-    @State private var initialTemplate: StrengthTemplate?
-
-    private var today: Date { Plan.calendar.startOfDay(for: Date()) }
-    private var strength: StrengthLog? { store.log(on: today)?.strength }
-    private var suggestion: StrengthSuggestion { store.strengthSuggestion(on: today) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: "figure.strengthtraining.traditional")
-                    .font(.title3)
-                    .foregroundStyle(.teal)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("筋トレ")
-                        .font(.subheadline.bold())
-                    Text(strength == nil ? "種目・重量・主観的負荷を記録" : strengthSummary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    initialTemplate = nil
-                    showingEditor = true
-                } label: {
-                    Image(systemName: strength == nil ? "plus" : "pencil")
-                        .font(.subheadline.bold())
-                        .frame(width: 34, height: 34)
-                }
-                .buttonStyle(.bordered)
-                .tint(.teal)
-                .accessibilityLabel(strength == nil ? "筋トレを記録" : "筋トレを編集")
-            }
-
-            if let strength {
-                Text(strength.exercises.map(exerciseSummary).joined(separator: " / "))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                if strength.rpe != nil || !(strength.soreness ?? []).isEmpty {
-                    HStack(spacing: 8) {
-                        if let rpe = strength.rpe {
-                            Label("RPE \(rpe)", systemImage: "gauge.with.dots.needle.33percent")
-                        }
-                        if let soreness = strength.soreness, !soreness.isEmpty {
-                            Label(soreness.map(\.label).joined(separator: "・"), systemImage: "bolt.heart")
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                }
-            } else {
-                suggestionView
-            }
-            Text("累計 \(store.totalStrengthSessions)回")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(16)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-        .sheet(isPresented: $showingEditor) {
-            StrengthLogEditor(date: today, initialTemplate: initialTemplate)
-                .environmentObject(store)
-        }
-    }
-
-    private var strengthSummary: String {
-        guard let strength else { return "" }
-        return "\(strength.templateName ?? strength.category.label) / \(strength.exercises.count)種目"
-    }
-
-    private func exerciseSummary(_ exercise: StrengthExercise) -> String {
-        var result = exercise.name
-        if let weight = exercise.weightKg { result += " \(Format.km(weight))kg" }
-        return "\(result) \(exercise.sets)セット×\(exercise.reps)回"
-    }
-
-    @ViewBuilder
-    private var suggestionView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: suggestion.template == nil ? "heart.text.square" : "sparkles")
-                    .foregroundStyle(suggestion.template == nil ? .orange : .teal)
-                Text(suggestion.title)
-                    .font(.caption.bold())
-            }
-            if let template = suggestion.template {
-                Text(template.name)
-                    .font(.subheadline.bold())
-                Text(suggestion.reason)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button {
-                    initialTemplate = template
-                    showingEditor = true
-                } label: {
-                    Label("このメニューを使う", systemImage: "arrow.right")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .tint(.teal)
-            } else {
-                Text(suggestion.reason)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.teal.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-// MARK: - 筋トレメニュー
-
-struct StrengthMenuCard: View {
-    @EnvironmentObject private var store: TrackerStore
-    @State private var editorTemplate: StrengthTemplate?
-    @State private var confirmingStop = false
-
-    private var today: Date { Plan.calendar.startOfDay(for: Date()) }
-    private var loggedToday: Bool { store.log(on: today)?.strength != nil }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let week = store.strengthProgramWeek(of: today) {
-                if StrengthProgram.weeks.indices.contains(week) {
-                    activeView(week: week)
-                } else if week < 0 {
-                    upcomingView
-                } else {
-                    finishedView
-                }
-            } else {
-                notStartedView
-            }
-        }
-        .padding(16)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-        .sheet(item: $editorTemplate) { template in
-            StrengthLogEditor(date: today, initialTemplate: template)
-                .environmentObject(store)
-        }
-        .confirmationDialog("筋トレプログラムをやめますか？", isPresented: $confirmingStop, titleVisibility: .visible) {
-            Button("やめる", role: .destructive) { store.stopStrengthProgram() }
-        } message: {
-            Text("これまでの筋トレ記録は残ります")
-        }
-    }
-
-    private func activeView(week: Int) -> some View {
-        let plan = StrengthProgram.weeks[week]
-        let items = doneFlags(plan: plan, counts: store.strengthMenuDoneCounts(week: week))
-        let doneCount = items.filter(\.done).count
-
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("今週の筋トレメニュー").font(.subheadline.bold())
-                Spacer()
-                Text("第\(week + 1)週 / \(StrengthProgram.weeks.count)週・\(StrengthProgram.phases[plan.phase])")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Menu {
-                    Button("プログラムをやめる", role: .destructive) { confirmingStop = true }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .frame(width: 30, height: 30)
-                }
-                .accessibilityLabel("筋トレプログラムの操作")
-            }
-
-            HStack {
-                Label(plan.volume.label, systemImage: "dumbbell")
-                    .foregroundStyle(.teal)
-                Spacer()
-                Text("\(doneCount) / \(items.count)回\(doneCount == items.count ? " 完了!" : "")")
-                    .foregroundStyle(.secondary)
-            }
-            .font(.caption)
-
-            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                Button {
-                    editorTemplate = store.strengthProgramTemplate(named: item.label, on: today)
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(item.done ? .green : Color(.systemGray4))
-                        Text(item.label)
-                            .strikethrough(item.done)
-                            .foregroundStyle(item.done ? .secondary : .primary)
-                        Spacer()
-                        if !item.done && !loggedToday {
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .font(.subheadline)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                // 今日すでに記録済みなら、上書きを避けて上の筋トレカードから編集してもらう
-                .disabled(item.done || loggedToday)
-                .accessibilityHint(item.done ? "消化済み" : "このメニューで今日の筋トレを記録")
-            }
-
-            Text(plan.tip)
-                .font(.caption)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.teal.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-                .foregroundStyle(.teal)
-        }
-    }
-
-    private var notStartedView: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("筋トレメニュー").font(.subheadline.bold())
-            Text("基礎期・強化期・維持期の\(StrengthProgram.weeks.count)週プログラム。週2〜3回のマシンメニューを、期に合わせたセット・回数で進めます")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            startButton("今週から始める")
-        }
-    }
-
-    private var upcomingView: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("筋トレメニュー").font(.subheadline.bold())
-            if let start = store.strengthProgramStart {
-                Text("\(start.formatted(.dateTime.month().day()))の週から開始します")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var finishedView: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("\(StrengthProgram.weeks.count)週プログラム完了 🎉").font(.subheadline.bold())
-            Text("累計 \(store.totalStrengthSessions)回。記録した重量を出発点に、もう一周できます")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            HStack {
-                startButton("もう一度始める")
-                Button("終了する") { store.stopStrengthProgram() }
-                    .buttonStyle(.bordered)
-            }
-        }
-    }
-
-    private func startButton(_ title: String) -> some View {
-        Button {
-            store.startStrengthProgram(on: today)
-        } label: {
-            Label(title, systemImage: "play.fill")
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(.teal)
-    }
-
-    private func doneFlags(plan: StrengthWeekPlan, counts: [String: Int]) -> [(label: String, done: Bool)] {
-        var seen: [String: Int] = [:]
-        return plan.sessions.map { name in
-            seen[name, default: 0] += 1
-            return (name, counts[name, default: 0] >= seen[name]!)
-        }
     }
 }
 
@@ -1004,7 +718,7 @@ struct HealthCard: View {
                     ProgressView()
                 } else if health.isEnabled {
                     Button {
-                        Task { await health.syncWorkouts(into: store) }
+                        Task { await health.syncAll(into: store) }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.subheadline.bold())
@@ -1017,7 +731,7 @@ struct HealthCard: View {
                         requesting = true
                         Task {
                             if await health.enable() {
-                                await health.syncWorkouts(into: store)
+                                await health.syncAll(into: store)
                             }
                             requesting = false
                         }
@@ -1129,7 +843,7 @@ struct CalendarCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("18週間カレンダー").font(.subheadline.bold())
-            Text("✓=走った ・=5分だけ 休=痛み休養 筋=筋トレ 赤点=痛みあり").font(.caption2).foregroundStyle(.secondary)
+            Text("✓=走った ・=5分だけ 休=痛み休養 赤点=痛みあり").font(.caption2).foregroundStyle(.secondary)
 
             Grid(horizontalSpacing: 3, verticalSpacing: 3) {
                 GridRow {
@@ -1166,7 +880,7 @@ struct CalendarCard: View {
 
     @ViewBuilder
     private func dayCell(_ day: Date) -> some View {
-        let log = store.log(on: day)
+        let log = store.runLog(on: day)
         let isToday = day == today
         let isRace = day == Plan.race
         let dayNum = Plan.calendar.component(.day, from: day)
@@ -1176,15 +890,13 @@ struct CalendarCard: View {
             case .rest: return "休"
             case .mini: return "・"
             case .run: return "✓"
-            case .strength: return "筋"
-            case nil: return isRace ? "🏁" : " "
+            case .strength, nil: return isRace ? "🏁" : " "
             }
         }()
         let symbolColor: Color = {
             switch log?.type {
             case .rest: return .blue
             case .mini: return .orange
-            case .strength: return .teal
             default: return .green
             }
         }()
@@ -1229,7 +941,6 @@ struct DayLogEditor: View {
     @State private var feel: Feel?
     @State private var errorMessage: String?
     @State private var loaded = false
-    @State private var showingStrengthEditor = false
 
     private var existingLog: RunLog? { store.log(on: date) }
     private var menuWeek: Int { min(max(store.weekIndex(of: date), 0), Plan.weeks.count - 1) }
@@ -1262,20 +973,6 @@ struct DayLogEditor: View {
                         Text("痛み休養").tag(LogType.rest)
                     }
                     .pickerStyle(.segmented)
-                }
-
-                Section("筋トレ") {
-                    if let strength = existingLog?.strength {
-                        HStack {
-                            Text(strength.templateName ?? strength.category.label)
-                            Spacer()
-                            Text("\(strength.exercises.count)種目")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Button(existingLog?.strength == nil ? "筋トレを記録" : "筋トレを編集") {
-                        showingStrengthEditor = true
-                    }
                 }
 
                 if logType == .run {
@@ -1345,10 +1042,6 @@ struct DayLogEditor: View {
                 Text(errorMessage ?? "")
             }
             .onAppear(perform: loadOnce)
-            .sheet(isPresented: $showingStrengthEditor) {
-                StrengthLogEditor(date: date)
-                    .environmentObject(store)
-            }
         }
     }
 
@@ -1413,235 +1106,6 @@ struct DayLogEditor: View {
     }
 }
 
-struct SorenessChips: View {
-    @Binding var selection: Set<SorenessArea>
-
-    var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
-            ForEach(SorenessArea.allCases) { area in
-                let selected = selection.contains(area)
-                Button {
-                    if selected { selection.remove(area) } else { selection.insert(area) }
-                } label: {
-                    Text(area.label)
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(selected ? Color.orange.opacity(0.15) : Color(.systemGroupedBackground),
-                                    in: Capsule())
-                        .foregroundStyle(selected ? .orange : .primary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-}
-
-struct StrengthLogEditor: View {
-    @EnvironmentObject private var store: TrackerStore
-    @Environment(\.dismiss) private var dismiss
-
-    let date: Date
-    let initialTemplate: StrengthTemplate?
-
-    @State private var category: StrengthCategory = .full
-    @State private var templateName: String?
-    @State private var exercises: [StrengthExercise] = []
-    @State private var rpe = 0
-    @State private var soreness: Set<SorenessArea> = []
-    @State private var errorMessage: String?
-    @State private var loaded = false
-
-    init(date: Date, initialTemplate: StrengthTemplate? = nil) {
-        self.date = date
-        self.initialTemplate = initialTemplate
-    }
-
-    private var existingStrength: StrengthLog? { store.log(on: date)?.strength }
-
-    private var dateLabel: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "ja_JP")
-        f.calendar = Plan.calendar
-        f.dateStyle = .full
-        return f.string(from: date)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Text(dateLabel)
-                }
-
-                Section("内容") {
-                    Picker("部位", selection: $category) {
-                        ForEach(StrengthCategory.allCases) { category in
-                            Text(category.label).tag(category)
-                        }
-                    }
-
-                    Menu {
-                        ForEach(StrengthTemplate.presets) { template in
-                            Button(template.name) {
-                                apply(store.strengthProgramTemplate(named: template.name, on: date) ?? template)
-                            }
-                        }
-                    } label: {
-                        Label(templateName ?? "テンプレートを適用", systemImage: "square.on.square")
-                    }
-                }
-
-                Section("種目") {
-                    ForEach(exercises.indices, id: \.self) { index in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                TextField("種目名", text: $exercises[index].name)
-                                Button(role: .destructive) {
-                                    exercises.remove(at: index)
-                                } label: {
-                                    Image(systemName: "trash")
-                                }
-                                .accessibilityLabel("\(exercises[index].name.isEmpty ? "種目" : exercises[index].name)を削除")
-                            }
-                            TextField("重量 kg（自重なら空欄）", text: weightBinding(for: index))
-                                .keyboardType(.decimalPad)
-                            HStack {
-                                Stepper("\(exercises[index].sets)セット", value: $exercises[index].sets, in: 1...20)
-                                Stepper("\(exercises[index].reps)回", value: $exercises[index].reps, in: 1...100)
-                            }
-                            .font(.subheadline)
-                        }
-                        .padding(.vertical, 4)
-                    }
-
-                    Button {
-                        exercises.append(StrengthExercise(name: "", reps: 10, sets: 3))
-                    } label: {
-                        Label("種目を追加", systemImage: "plus")
-                    }
-                }
-
-                Section("主観的負荷") {
-                    Picker("RPE", selection: $rpe) {
-                        Text("未記録").tag(0)
-                        ForEach(1...10, id: \.self) { value in
-                            Text("\(value)").tag(value)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    Text(rpe == 0 ? "主観的なきつさを残せます" : "RPE \(rpe): \(rpeDescription)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("筋肉痛・張り") {
-                    SorenessChips(selection: $soreness)
-                }
-
-                if existingStrength != nil {
-                    Section {
-                        Button("筋トレ記録を削除", role: .destructive) {
-                            store.removeStrength(on: date)
-                            dismiss()
-                        }
-                    }
-                }
-            }
-            .navigationTitle(existingStrength == nil ? "筋トレを記録" : "筋トレを編集")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("閉じる") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { save() }
-                }
-            }
-            .alert("入力エラー", isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) { errorMessage = nil }
-            } message: {
-                Text(errorMessage ?? "")
-            }
-            .onAppear(perform: loadOnce)
-        }
-    }
-
-    private var rpeDescription: String {
-        switch rpe {
-        case 1...3: return "余裕あり"
-        case 4...6: return "適度"
-        case 7...8: return "きつい"
-        default: return "限界に近い"
-        }
-    }
-
-    private func loadOnce() {
-        guard !loaded else { return }
-        loaded = true
-        if let existingStrength {
-            category = existingStrength.category
-            templateName = existingStrength.templateName
-            exercises = existingStrength.exercises
-            rpe = existingStrength.rpe ?? 0
-            soreness = Set(existingStrength.soreness ?? [])
-        } else if let initialTemplate {
-            apply(initialTemplate)
-        }
-    }
-
-    private func apply(_ template: StrengthTemplate) {
-        category = template.category
-        templateName = template.name
-        exercises = template.exercises
-    }
-
-    private func weightBinding(for index: Int) -> Binding<String> {
-        Binding(
-            get: { exercises[index].weightKg.map(Format.km) ?? "" },
-            set: { text in
-                let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .replacingOccurrences(of: ",", with: ".")
-                exercises[index].weightKg = Double(normalized)
-            }
-        )
-    }
-
-    private func save() {
-        let normalizedExercises = exercises.map { exercise in
-            StrengthExercise(
-                name: exercise.name.trimmingCharacters(in: .whitespacesAndNewlines),
-                weightKg: exercise.weightKg,
-                reps: exercise.reps,
-                sets: exercise.sets
-            )
-        }
-        guard !normalizedExercises.isEmpty else {
-            errorMessage = "種目を1つ以上追加してください"
-            return
-        }
-        guard normalizedExercises.allSatisfy({ !$0.name.isEmpty && $0.weightKg.map({ $0.isFinite && $0 >= 0 }) != false }) else {
-            errorMessage = "種目名と重量を確認してください"
-            return
-        }
-
-        store.recordStrength(
-            StrengthLog(
-                category: category,
-                templateName: templateName,
-                exercises: normalizedExercises,
-                rpe: rpe == 0 ? nil : rpe,
-                soreness: soreness.isEmpty ? nil : Array(soreness)
-            ),
-            on: date
-        )
-        dismiss()
-    }
-}
-
 // MARK: - データ保管
 
 struct DataBackupCard: View {
@@ -1649,6 +1113,8 @@ struct DataBackupCard: View {
 
     @State private var isExporting = false
     @State private var isImporting = false
+    /// 同じビューに fileImporter を2つ付けると片方しか動かないので、1つを使い分ける
+    @State private var importsHabitLife = false
     @State private var exportData = Data()
     @State private var exportFilename = "marathon-tracker-backup"
     @State private var pendingImportData: Data?
@@ -1671,6 +1137,7 @@ struct DataBackupCard: View {
                 .tint(.green)
 
                 Button {
+                    importsHabitLife = false
                     isImporting = true
                 } label: {
                     Label("読み込む", systemImage: "tray.and.arrow.down")
@@ -1678,6 +1145,15 @@ struct DataBackupCard: View {
                 }
                 .buttonStyle(.bordered)
             }
+
+            Button {
+                importsHabitLife = true
+                isImporting = true
+            } label: {
+                Label("日々をつくるから取り込む", systemImage: "arrow.triangle.merge")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
 
             Text(statusText.isEmpty ? "記録は端末内に保存されています。機種変更前に書き出してください" : statusText)
                 .font(.caption)
@@ -1700,7 +1176,11 @@ struct DataBackupCard: View {
             }
         }
         .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json]) { result in
-            prepareImport(result)
+            if importsHabitLife {
+                importHabitLife(result)
+            } else {
+                prepareImport(result)
+            }
         }
         .alert("読み込み確認", isPresented: $showingImportConfirm) {
             Button("上書き", role: .destructive) {
@@ -1711,7 +1191,7 @@ struct DataBackupCard: View {
                 setStatus("読み込みをキャンセルしました")
             }
         } message: {
-            Text("現在の記録と次の目標を、読み込んだ\(pendingImportCount)件の記録で上書きします。")
+            Text("現在の記録・次の目標・日々の記録を、読み込んだ\(pendingImportCount)件の記録で上書きします。")
         }
     }
 
@@ -1739,6 +1219,22 @@ struct DataBackupCard: View {
             showingImportConfirm = true
         } catch {
             setStatus("読み込みに失敗しました: \(error.localizedDescription)", isError: true)
+        }
+    }
+
+    /// Web版の書き出しは今の記録に足すだけなので、確認なしで取り込む
+    private func importHabitLife(_ result: Result<URL, Error>) {
+        do {
+            let url = try result.get()
+            let allowed = url.startAccessingSecurityScopedResource()
+            defer {
+                if allowed { url.stopAccessingSecurityScopedResource() }
+            }
+            let imported = try store.importHabitLife(Data(contentsOf: url))
+            NotificationManager.reschedule(store: store)
+            setStatus(imported.summary)
+        } catch {
+            setStatus("取り込みに失敗しました: \(error.localizedDescription)", isError: true)
         }
     }
 

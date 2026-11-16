@@ -181,4 +181,61 @@ final class StrengthProgramTests: XCTestCase {
         let json = #"{"logs":{"2026-07-07":{"type":"run"}},"strengthProgramStart":"11/09"}"#
         XCTAssertThrowsError(try store.importBackupData(Data(json.utf8)))
     }
+
+    func testTemplatesOnlyUseMachinesInTheGym() {
+        // テンプレートの種目が、記録画面で選べる設備一覧から外れないようにする
+        let machines = Set(StrengthTemplate.machineGroups.flatMap(\.machines))
+        for template in StrengthTemplate.presets {
+            for exercise in template.exercises {
+                XCTAssertTrue(machines.contains(exercise.name), "\(template.name) の \(exercise.name) が設備一覧にない")
+            }
+        }
+    }
+
+    // MARK: - 種目の初期値
+
+    private func logMachine(_ name: String, weight: Double, reps: Int, sets: Int, on date: Date, in store: TrackerStore) {
+        store.recordStrength(StrengthLog(category: .upper,
+                                         exercises: [StrengthExercise(name: name, weightKg: weight, reps: reps, sets: sets)]),
+                             on: date)
+    }
+
+    func testAddedMachineCarriesOverLastSession() {
+        let store = makeStore()
+        logMachine("チェストプレス", weight: 30, reps: 8, sets: 3, on: Plan.date(2026, 11, 2), in: store)
+        logMachine("チェストプレス", weight: 32.5, reps: 10, sets: 3, on: Plan.date(2026, 11, 9), in: store)
+        // 同じ日や後の日の記録は前回として使わない
+        logMachine("チェストプレス", weight: 99, reps: 1, sets: 1, on: Plan.date(2026, 11, 16), in: store)
+
+        let suggested = store.suggestedExercise(named: "チェストプレス", on: Plan.date(2026, 11, 16))
+
+        XCTAssertEqual(suggested, StrengthExercise(name: "チェストプレス", weightKg: 32.5, reps: 10, sets: 3))
+        XCTAssertEqual(store.suggestedExercise(named: "レッグプレス", on: Plan.date(2026, 11, 16)),
+                       StrengthExercise(name: "レッグプレス", reps: 10, sets: 3))
+    }
+
+    func testAddedMachineFollowsProgramVolume() {
+        let store = makeStore()
+        let start = Plan.date(2026, 11, 16)
+        store.startStrengthProgram(on: start)
+        logMachine("チェストプレス", weight: 40, reps: 10, sets: 3, on: Plan.date(2026, 11, 9), in: store)
+
+        // 第1週は導入期: 12回以上×2セット、重量は前回のまま
+        XCTAssertEqual(store.suggestedExercise(named: "チェストプレス", on: start),
+                       StrengthExercise(name: "チェストプレス", weightKg: 40, reps: 12, sets: 2))
+        // 第8週は回復週: 2セット、重量を2割下げる
+        let recovery = Plan.calendar.date(byAdding: .day, value: 7 * 7, to: start)!
+        XCTAssertEqual(store.suggestedExercise(named: "チェストプレス", on: recovery),
+                       StrengthExercise(name: "チェストプレス", weightKg: 32, reps: 10, sets: 2))
+    }
+
+    func testTemplateExercisesGetLastWeight() {
+        let store = makeStore()
+        logMachine("レッグプレス", weight: 80, reps: 10, sets: 3, on: Plan.date(2026, 11, 9), in: store)
+        let template = StrengthExercise(name: "レッグプレス", reps: 10, sets: 2)
+
+        XCTAssertEqual(store.withLastWeight(template, on: Plan.date(2026, 11, 16)).weightKg, 80)
+        XCTAssertEqual(store.withLastWeight(StrengthExercise(name: "レッグプレス", weightKg: 60, reps: 10, sets: 2),
+                                            on: Plan.date(2026, 11, 16)).weightKg, 60)
+    }
 }

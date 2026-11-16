@@ -206,6 +206,12 @@ struct StrengthLog: Codable, Equatable {
     var soreness: [SorenessArea]? = nil
 }
 
+struct StrengthMachineGroup: Identifiable {
+    let name: String
+    let machines: [String]
+    var id: String { name }
+}
+
 struct StrengthTemplate: Identifiable {
     let name: String
     let category: StrengthCategory
@@ -213,35 +219,42 @@ struct StrengthTemplate: Identifiable {
 
     var id: String { name }
 
-    /// エニタイムフィットネスで比較的導入例の多いマシン名を基準にする。
-    /// 店舗によって機種・名称は異なるため、適用後に種目名は編集できる。
+    /// 記録画面で選べる、通っているジムのマシン。複合マシンは用途ごとに分ける。
+    static let machineGroups: [StrengthMachineGroup] = [
+        StrengthMachineGroup(name: "胸・肩・腕", machines: ["チェストプレス", "ショルダープレス（プレートローディング）", "ショルダープレス（ピン式）", "ペクトルフライ", "リアデルト", "トライセプスエクステンション", "アームカール"]),
+        StrengthMachineGroup(name: "背中・体幹", machines: ["ラットプルダウン", "シーテッドロー", "ケーブルマシン", "ケーブル・クランチ", "ケーブル・ウッドチョップ", "ケーブル・パロフプレス", "Tバーロー（プレートローディング）"]),
+        StrengthMachineGroup(name: "脚・下半身", machines: ["レッグプレス", "レッグプレスでカーフレイズ", "レッグエクステンション", "シーテッドレッグカール", "ライイングレッグカール", "Vスクワット", "ハックスクワット", "ヒップスラスト（プレートローディング）"]),
+    ]
+
+    /// 通っているジムの設備(machineGroups)にある機械だけで組む。専用マシンが無い種目はケーブルマシンなどで代える。
+    /// 適用後に種目名は編集できる。
     static let presets: [StrengthTemplate] = [
         StrengthTemplate(name: "下半身マシン", category: .lower, exercises: [
             StrengthExercise(name: "レッグプレス", reps: 10, sets: 3),
-            StrengthExercise(name: "シーテッド・レッグカール", reps: 10, sets: 3),
+            StrengthExercise(name: "シーテッドレッグカール", reps: 10, sets: 3),
             StrengthExercise(name: "レッグエクステンション", reps: 10, sets: 2),
-            StrengthExercise(name: "カーフレイズマシン", reps: 15, sets: 3),
+            StrengthExercise(name: "レッグプレスでカーフレイズ", reps: 15, sets: 3),
         ]),
         StrengthTemplate(name: "上半身プッシュ", category: .upper, exercises: [
             StrengthExercise(name: "チェストプレス", reps: 10, sets: 3),
-            StrengthExercise(name: "ショルダープレス", reps: 10, sets: 3),
-            StrengthExercise(name: "ペックフライ", reps: 12, sets: 2),
+            StrengthExercise(name: "ショルダープレス（ピン式）", reps: 10, sets: 3),
+            StrengthExercise(name: "ペクトルフライ", reps: 12, sets: 2),
         ]),
         StrengthTemplate(name: "上半身プル", category: .upper, exercises: [
             StrengthExercise(name: "ラットプルダウン", reps: 10, sets: 3),
             StrengthExercise(name: "シーテッドロー", reps: 10, sets: 3),
-            StrengthExercise(name: "リアデルト／ペックフライ", reps: 12, sets: 2),
+            StrengthExercise(name: "リアデルト", reps: 12, sets: 2),
         ]),
         StrengthTemplate(name: "体幹・安定性マシン", category: .core, exercises: [
-            StrengthExercise(name: "アブドミナルクランチ", reps: 12, sets: 3),
-            StrengthExercise(name: "ロータリートルソー", reps: 12, sets: 2),
-            StrengthExercise(name: "バックエクステンション", reps: 12, sets: 2),
+            StrengthExercise(name: "ケーブル・クランチ", reps: 12, sets: 3),
+            StrengthExercise(name: "ケーブル・ウッドチョップ", reps: 12, sets: 2),
+            StrengthExercise(name: "ケーブル・パロフプレス", reps: 12, sets: 2),
         ]),
         StrengthTemplate(name: "全身マシン30分", category: .full, exercises: [
             StrengthExercise(name: "レッグプレス", reps: 10, sets: 2),
             StrengthExercise(name: "チェストプレス", reps: 10, sets: 2),
             StrengthExercise(name: "ラットプルダウン", reps: 10, sets: 2),
-            StrengthExercise(name: "アブドミナルクランチ", reps: 12, sets: 2),
+            StrengthExercise(name: "ケーブル・クランチ", reps: 12, sets: 2),
         ]),
     ]
 
@@ -471,6 +484,19 @@ struct TrackerBackupData: Codable {
     var nextGoal: NextGoal?
     /// 筋トレプログラムの開始週(yyyy-MM-dd)。形式バージョン4で追加
     var strengthProgramStart: String?
+    // 以下は形式バージョン5で追加(日々をつくるから統合した記録)。旧バックアップでは nil
+    var dailyEntries: [String: DailyEntry]? = nil
+    var habits: [String: Habit]? = nil
+    var habitChecks: [String: HabitCheck]? = nil
+    var metrics: [String: DailyMetric]? = nil
+    var workNotes: [String: WorkNote]? = nil
+    var weeklyReviews: [String: WeeklyReview]? = nil
+
+    /// 日々の記録の件数(ラン記録以外)
+    var dailyRecordCount: Int {
+        (dailyEntries?.count ?? 0) + (habits?.count ?? 0) + (habitChecks?.count ?? 0) +
+        (metrics?.count ?? 0) + (workNotes?.count ?? 0) + (weeklyReviews?.count ?? 0)
+    }
 }
 
 enum TrackerBackupError: LocalizedError {
@@ -526,7 +552,38 @@ final class TrackerStore: ObservableObject {
         }
     }
 
+    // 日々の記録(日々をつくるから統合)。種類ごとに別キーに保存し、1種類の読み込み失敗が他に波及しないようにする。
+    // 操作は DailyModels.swift の extension に置くため、ここでは set を private にしない
+    @Published var dailyEntries: [String: DailyEntry] = [:] {
+        didSet { save(dailyEntries, forKey: Self.dailyEntriesKey) }
+    }
+    @Published var habits: [String: Habit] = [:] {
+        didSet { save(habits, forKey: Self.habitsKey) }
+    }
+    /// キーは HabitCheck.storageKey(日付|習慣ID)
+    @Published var habitChecks: [String: HabitCheck] = [:] {
+        didSet { save(habitChecks, forKey: Self.habitChecksKey) }
+    }
+    /// キーは日付(yyyy-MM-dd)
+    @Published var metrics: [String: DailyMetric] = [:] {
+        didSet { save(metrics, forKey: Self.metricsKey) }
+    }
+    /// キーは日付(yyyy-MM-dd)
+    @Published var workNotes: [String: WorkNote] = [:] {
+        didSet { save(workNotes, forKey: Self.workNotesKey) }
+    }
+    /// キーは週の月曜(yyyy-MM-dd)
+    @Published var weeklyReviews: [String: WeeklyReview] = [:] {
+        didSet { save(weeklyReviews, forKey: Self.weeklyReviewsKey) }
+    }
+
     private static let storageKey = "mt-data"
+    private static let dailyEntriesKey = "mt-daily-entries"
+    private static let habitsKey = "mt-habits"
+    private static let habitChecksKey = "mt-habit-checks"
+    private static let metricsKey = "mt-metrics"
+    private static let workNotesKey = "mt-work-notes"
+    private static let weeklyReviewsKey = "mt-weekly-reviews"
     private static let suppressedKey = "mt-hk-suppressed"
     private static let nextGoalKey = "mt-next-goal"
     private static let strengthProgramKey = "mt-strength-program-start"
@@ -549,6 +606,12 @@ final class TrackerStore: ObservableObject {
         if let startKey = userDefaults.string(forKey: Self.strengthProgramKey) {
             strengthProgramStart = keyFormatter.date(from: startKey)
         }
+        dailyEntries = load(forKey: Self.dailyEntriesKey)
+        habits = load(forKey: Self.habitsKey)
+        habitChecks = load(forKey: Self.habitChecksKey)
+        metrics = load(forKey: Self.metricsKey)
+        workNotes = load(forKey: Self.workNotesKey)
+        weeklyReviews = load(forKey: Self.weeklyReviewsKey)
         if let data = userDefaults.data(forKey: Self.storageKey),
            let decoded = try? JSONDecoder().decode([String: RunLog].self, from: data) {
             let migrated = Self.migrateLegacyAutoLogs(decoded)
@@ -576,6 +639,17 @@ final class TrackerStore: ObservableObject {
         }
     }
 
+    private func save<T: Encodable>(_ value: T, forKey key: String) {
+        if let data = try? JSONEncoder().encode(value) {
+            userDefaults.set(data, forKey: key)
+        }
+    }
+
+    private func load<T: Decodable>(forKey key: String) -> [String: T] {
+        guard let data = userDefaults.data(forKey: key) else { return [:] }
+        return (try? JSONDecoder().decode([String: T].self, from: data)) ?? [:]
+    }
+
     private func persistNextGoal() {
         guard let nextGoal else {
             userDefaults.removeObject(forKey: Self.nextGoalKey)
@@ -595,6 +669,9 @@ final class TrackerStore: ObservableObject {
     }
 
     func key(for date: Date) -> String { keyFormatter.string(from: date) }
+
+    /// key(for:) の逆変換。不正な文字列は nil
+    func dailyDate(_ key: String) -> Date? { keyFormatter.date(from: key) }
 
     func log(on date: Date) -> RunLog? { logs[key(for: date)] }
 
@@ -805,6 +882,20 @@ final class TrackerStore: ObservableObject {
     var totalRuns: Int { logs.values.filter { $0.type == .run || $0.type == .mini }.count }
     var totalStrengthSessions: Int { logs.values.filter { $0.strength != nil }.count }
 
+    /// ラン画面用のログ。筋トレだけの日(.strength)はランの記録なしとして nil を返す
+    func runLog(on date: Date) -> RunLog? {
+        guard let log = log(on: date), log.type != .strength else { return nil }
+        return log
+    }
+
+    /// 筋トレを記録した日(新しい順)
+    func recentStrengthDays(limit: Int = 10) -> [Date] {
+        logs.filter { $0.value.strength != nil }
+            .keys.sorted(by: >)
+            .prefix(limit)
+            .compactMap(dailyDate)
+    }
+
     /// ランの予定、故障兆候、直近の筋トレ負荷から当日に合うマシンメニューを選ぶ。
     /// 筋トレプログラム中は今週の未消化メニューを優先する(安全ルールは常に先に効く)。
     func strengthSuggestion(on date: Date) -> StrengthSuggestion {
@@ -976,6 +1067,44 @@ extension TrackerStore {
         }
     }
 
+    /// 同じ種目を最後に行った記録(その日より前)。種目名の完全一致で探す
+    func lastExercise(named name: String, before date: Date) -> StrengthExercise? {
+        let day = key(for: date)
+        return logs.filter { $0.key < day }
+            .sorted { $0.key > $1.key }
+            .lazy
+            .compactMap { $0.value.strength?.exercises.last { $0.name == name } }
+            .first
+    }
+
+    /// 記録画面で種目を足すときの初期値。重量・回数・セットは前回を引き継ぎ、
+    /// 12週プログラム中は回数・セットを今の期に合わせる
+    func suggestedExercise(named name: String, on date: Date) -> StrengthExercise {
+        let last = lastExercise(named: name, before: date)
+        var exercise = StrengthExercise(name: name, weightKg: last?.weightKg,
+                                        reps: last?.reps ?? 10, sets: last?.sets ?? 3)
+        if let week = activeStrengthWeek(of: date) {
+            exercise = StrengthProgram.weeks[week].volume.apply(exercise)
+            exercise.weightKg = weightForWeek(last?.weightKg, week: week)
+        }
+        return exercise
+    }
+
+    /// テンプレートの種目に、前回の重量を入れる(回数・セットはテンプレートのまま)
+    func withLastWeight(_ exercise: StrengthExercise, on date: Date) -> StrengthExercise {
+        guard exercise.weightKg == nil else { return exercise }
+        var result = exercise
+        let last = lastExercise(named: exercise.name, before: date)?.weightKg
+        result.weightKg = activeStrengthWeek(of: date).map { weightForWeek(last, week: $0) } ?? last
+        return result
+    }
+
+    /// 回復週は前回の重量から2割下げる(0.5kg単位)
+    private func weightForWeek(_ weight: Double?, week: Int) -> Double? {
+        guard let weight, StrengthProgram.weeks[week].volume == .recovery else { return weight }
+        return (weight * 0.8 * 2).rounded() / 2
+    }
+
     /// プログラム期間中は期の量に合わせたテンプレート、それ以外は既定のテンプレート
     func strengthProgramTemplate(named name: String, on date: Date) -> StrengthTemplate? {
         if let week = activeStrengthWeek(of: date) {
@@ -999,13 +1128,19 @@ extension TrackerStore {
     func exportBackupData() throws -> Data {
         let payload = TrackerBackupEnvelope(
             app: "okayama-marathon-18-week-trainer-ios",
-            version: 4,
+            version: 5,
             exportedAt: ISO8601DateFormatter().string(from: Date()),
             data: TrackerBackupData(
                 logs: logs,
                 suppressedAutoDays: Array(suppressedAutoDays).sorted(),
                 nextGoal: nextGoal,
-                strengthProgramStart: strengthProgramStart.map(key(for:))
+                strengthProgramStart: strengthProgramStart.map(key(for:)),
+                dailyEntries: dailyEntries,
+                habits: habits,
+                habitChecks: habitChecks,
+                metrics: metrics,
+                workNotes: workNotes,
+                weeklyReviews: weeklyReviews
             )
         )
         let encoder = JSONEncoder()
@@ -1016,7 +1151,7 @@ extension TrackerStore {
     func importPreviewCount(from data: Data) throws -> Int {
         let backup = try Self.decodeBackupData(from: data)
         try Self.validateBackup(backup)
-        return backup.logs.count
+        return backup.logs.count + backup.dailyRecordCount
     }
 
     @discardableResult
@@ -1027,8 +1162,15 @@ extension TrackerStore {
         suppressedAutoDays = Set((backup.suppressedAutoDays ?? []).filter(Self.isValidDateKey))
         nextGoal = backup.nextGoal
         strengthProgramStart = backup.strengthProgramStart.flatMap(keyFormatter.date(from:))
+        // v4以前のバックアップには日々の記録が無い。上書き読み込みなので、無ければ空にする
+        dailyEntries = backup.dailyEntries ?? [:]
+        habits = backup.habits ?? [:]
+        habitChecks = backup.habitChecks ?? [:]
+        metrics = backup.metrics ?? [:]
+        workNotes = backup.workNotes ?? [:]
+        weeklyReviews = backup.weeklyReviews ?? [:]
         logs = backup.logs
-        return backup.logs.count
+        return backup.logs.count + backup.dailyRecordCount
     }
 
     private static func decodeBackupData(from data: Data) throws -> TrackerBackupData {
@@ -1046,7 +1188,15 @@ extension TrackerStore {
     }
 
     private static func validateBackup(_ backup: TrackerBackupData) throws {
-        guard !backup.logs.isEmpty else { throw TrackerBackupError.noImportableLogs }
+        guard !backup.logs.isEmpty || backup.dailyRecordCount > 0 else { throw TrackerBackupError.noImportableLogs }
+        let dailyDays = (backup.dailyEntries?.values.map(\.day) ?? []) +
+            (backup.habitChecks?.values.map(\.day) ?? []) +
+            (backup.metrics?.values.map(\.day) ?? []) +
+            (backup.workNotes?.values.map(\.day) ?? []) +
+            (backup.weeklyReviews?.values.map(\.weekStart) ?? [])
+        if let bad = dailyDays.first(where: { !isValidDateKey($0) }) {
+            throw TrackerBackupError.invalidDateKey(bad)
+        }
         for (key, log) in backup.logs {
             guard isValidDateKey(key) else { throw TrackerBackupError.invalidDateKey(key) }
             if let km = log.km, !isValidDistance(km) { throw TrackerBackupError.invalidDistance(key) }
