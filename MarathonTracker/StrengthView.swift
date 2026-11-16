@@ -457,8 +457,19 @@ struct StrengthLogEditor: View {
                         .padding(.vertical, 4)
                     }
 
-                    Button {
-                        exercises.append(StrengthExercise(name: "", reps: 10, sets: 3))
+                    Menu {
+                        ForEach(StrengthTemplate.machineGroups) { group in
+                            Menu(group.name) {
+                                ForEach(group.machines, id: \.self) { machine in
+                                    Button(machine) {
+                                        exercises.append(store.suggestedExercise(named: machine, on: date))
+                                    }
+                                }
+                            }
+                        }
+                        Button("自由入力") {
+                            exercises.append(StrengthExercise(name: "", reps: 10, sets: 3))
+                        }
                     } label: {
                         Label("種目を追加", systemImage: "plus")
                     }
@@ -538,7 +549,7 @@ struct StrengthLogEditor: View {
     private func apply(_ template: StrengthTemplate) {
         category = template.category
         templateName = template.name
-        exercises = template.exercises
+        exercises = template.exercises.map { store.withLastWeight($0, on: date) }
     }
 
     private func weightBinding(for index: Int) -> Binding<String> {

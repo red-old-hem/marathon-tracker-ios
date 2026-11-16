@@ -206,6 +206,12 @@ struct StrengthLog: Codable, Equatable {
     var soreness: [SorenessArea]? = nil
 }
 
+struct StrengthMachineGroup: Identifiable {
+    let name: String
+    let machines: [String]
+    var id: String { name }
+}
+
 struct StrengthTemplate: Identifiable {
     let name: String
     let category: StrengthCategory
@@ -213,35 +219,42 @@ struct StrengthTemplate: Identifiable {
 
     var id: String { name }
 
-    /// エニタイムフィットネスで比較的導入例の多いマシン名を基準にする。
-    /// 店舗によって機種・名称は異なるため、適用後に種目名は編集できる。
+    /// 記録画面で選べる、通っているジムのマシン。複合マシンは用途ごとに分ける。
+    static let machineGroups: [StrengthMachineGroup] = [
+        StrengthMachineGroup(name: "胸・肩・腕", machines: ["チェストプレス", "ショルダープレス（プレートローディング）", "ショルダープレス（ピン式）", "ペクトルフライ", "リアデルト", "トライセプスエクステンション", "アームカール"]),
+        StrengthMachineGroup(name: "背中・体幹", machines: ["ラットプルダウン", "シーテッドロー", "ケーブルマシン", "ケーブル・クランチ", "ケーブル・ウッドチョップ", "ケーブル・パロフプレス", "Tバーロー（プレートローディング）"]),
+        StrengthMachineGroup(name: "脚・下半身", machines: ["レッグプレス", "レッグプレスでカーフレイズ", "レッグエクステンション", "シーテッドレッグカール", "ライイングレッグカール", "Vスクワット", "ハックスクワット", "ヒップスラスト（プレートローディング）"]),
+    ]
+
+    /// 通っているジムの設備(machineGroups)にある機械だけで組む。専用マシンが無い種目はケーブルマシンなどで代える。
+    /// 適用後に種目名は編集できる。
     static let presets: [StrengthTemplate] = [
         StrengthTemplate(name: "下半身マシン", category: .lower, exercises: [
             StrengthExercise(name: "レッグプレス", reps: 10, sets: 3),
-            StrengthExercise(name: "シーテッド・レッグカール", reps: 10, sets: 3),
+            StrengthExercise(name: "シーテッドレッグカール", reps: 10, sets: 3),
             StrengthExercise(name: "レッグエクステンション", reps: 10, sets: 2),
-            StrengthExercise(name: "カーフレイズマシン", reps: 15, sets: 3),
+            StrengthExercise(name: "レッグプレスでカーフレイズ", reps: 15, sets: 3),
         ]),
         StrengthTemplate(name: "上半身プッシュ", category: .upper, exercises: [
             StrengthExercise(name: "チェストプレス", reps: 10, sets: 3),
-            StrengthExercise(name: "ショルダープレス", reps: 10, sets: 3),
-            StrengthExercise(name: "ペックフライ", reps: 12, sets: 2),
+            StrengthExercise(name: "ショルダープレス（ピン式）", reps: 10, sets: 3),
+            StrengthExercise(name: "ペクトルフライ", reps: 12, sets: 2),
         ]),
         StrengthTemplate(name: "上半身プル", category: .upper, exercises: [
             StrengthExercise(name: "ラットプルダウン", reps: 10, sets: 3),
             StrengthExercise(name: "シーテッドロー", reps: 10, sets: 3),
-            StrengthExercise(name: "リアデルト／ペックフライ", reps: 12, sets: 2),
+            StrengthExercise(name: "リアデルト", reps: 12, sets: 2),
         ]),
         StrengthTemplate(name: "体幹・安定性マシン", category: .core, exercises: [
-            StrengthExercise(name: "アブドミナルクランチ", reps: 12, sets: 3),
-            StrengthExercise(name: "ロータリートルソー", reps: 12, sets: 2),
-            StrengthExercise(name: "バックエクステンション", reps: 12, sets: 2),
+            StrengthExercise(name: "ケーブル・クランチ", reps: 12, sets: 3),
+            StrengthExercise(name: "ケーブル・ウッドチョップ", reps: 12, sets: 2),
+            StrengthExercise(name: "ケーブル・パロフプレス", reps: 12, sets: 2),
         ]),
         StrengthTemplate(name: "全身マシン30分", category: .full, exercises: [
             StrengthExercise(name: "レッグプレス", reps: 10, sets: 2),
             StrengthExercise(name: "チェストプレス", reps: 10, sets: 2),
             StrengthExercise(name: "ラットプルダウン", reps: 10, sets: 2),
-            StrengthExercise(name: "アブドミナルクランチ", reps: 12, sets: 2),
+            StrengthExercise(name: "ケーブル・クランチ", reps: 12, sets: 2),
         ]),
     ]
 
@@ -1052,6 +1065,44 @@ extension TrackerStore {
             }
             return true
         }
+    }
+
+    /// 同じ種目を最後に行った記録(その日より前)。種目名の完全一致で探す
+    func lastExercise(named name: String, before date: Date) -> StrengthExercise? {
+        let day = key(for: date)
+        return logs.filter { $0.key < day }
+            .sorted { $0.key > $1.key }
+            .lazy
+            .compactMap { $0.value.strength?.exercises.last { $0.name == name } }
+            .first
+    }
+
+    /// 記録画面で種目を足すときの初期値。重量・回数・セットは前回を引き継ぎ、
+    /// 12週プログラム中は回数・セットを今の期に合わせる
+    func suggestedExercise(named name: String, on date: Date) -> StrengthExercise {
+        let last = lastExercise(named: name, before: date)
+        var exercise = StrengthExercise(name: name, weightKg: last?.weightKg,
+                                        reps: last?.reps ?? 10, sets: last?.sets ?? 3)
+        if let week = activeStrengthWeek(of: date) {
+            exercise = StrengthProgram.weeks[week].volume.apply(exercise)
+            exercise.weightKg = weightForWeek(last?.weightKg, week: week)
+        }
+        return exercise
+    }
+
+    /// テンプレートの種目に、前回の重量を入れる(回数・セットはテンプレートのまま)
+    func withLastWeight(_ exercise: StrengthExercise, on date: Date) -> StrengthExercise {
+        guard exercise.weightKg == nil else { return exercise }
+        var result = exercise
+        let last = lastExercise(named: exercise.name, before: date)?.weightKg
+        result.weightKg = activeStrengthWeek(of: date).map { weightForWeek(last, week: $0) } ?? last
+        return result
+    }
+
+    /// 回復週は前回の重量から2割下げる(0.5kg単位)
+    private func weightForWeek(_ weight: Double?, week: Int) -> Double? {
+        guard let weight, StrengthProgram.weeks[week].volume == .recovery else { return weight }
+        return (weight * 0.8 * 2).rounded() / 2
     }
 
     /// プログラム期間中は期の量に合わせたテンプレート、それ以外は既定のテンプレート
