@@ -21,7 +21,8 @@ struct DistanceChartCard: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("週別の走行距離").font(.subheadline.bold())
                 Spacer()
-                Text("累計 \(Format.km(store.totalKm))km")
+                // レース後の記録を混ぜず、18週の合計を出す
+                Text("累計 \(Format.km(store.planSummary.km))km")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

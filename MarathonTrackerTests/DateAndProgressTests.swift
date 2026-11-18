@@ -107,6 +107,84 @@ final class DateAndProgressTests: XCTestCase {
         XCTAssertNil(store.painWarning())
     }
 
+    // MARK: - レース後
+
+    func testAfterRaceUsesFreeMenusInsteadOfPlan() {
+        let store = makeStore()
+        let after = Plan.date(2026, 11, 17)
+
+        XCTAssertEqual(store.menuOptions(on: after), Plan.freeMenus)
+        XCTAssertNil(store.nextMenu(on: after))
+        XCTAssertEqual(store.defaultMenu(on: after), "イージーラン")
+        // レース当日まではプランのメニュー
+        XCTAssertTrue(store.menuOptions(on: Plan.race).contains("本番 42.195km!"))
+    }
+
+    func testHealthWorkoutAfterRaceGetsNoPlanMenu() {
+        let store = makeStore()
+        let after = Plan.date(2026, 11, 14)
+
+        store.applyWorkouts([WorkoutDaySummary(date: after, km: 8, seconds: 2880, workoutIDs: ["w"])])
+
+        XCTAssertNil(store.log(on: after)?.menu)
+        XCTAssertEqual(store.weekKm(store.weekIndex(of: after)), 8)
+    }
+
+    func testStreakContinuesIntoWeeksAfterRace() {
+        let store = makeStore()
+        achieve(week: 17, in: store)
+        achieve(week: 18, in: store)
+        achieve(week: 19, in: store)
+
+        XCTAssertEqual(store.streak(today: Plan.date(2026, 11, 24)), 3)
+    }
+
+    func testPlanSummaryExcludesRecordsAfterRace() {
+        let store = makeStore()
+        store.record(RunLog(type: .run, km: 42.2), on: Plan.race)
+        store.record(RunLog(type: .mini), on: Plan.date(2026, 7, 6))
+        store.record(RunLog(type: .run, km: 5), on: Plan.date(2026, 11, 15))
+
+        let summary = store.planSummary
+
+        XCTAssertEqual(summary.runs, 2)
+        XCTAssertEqual(summary.km, 42.2)
+        XCTAssertEqual(summary.achievedWeeks, 0)
+    }
+
+    func testNextGoalTrainingCountsFromWeekAfterRaceUntilGoalDay() {
+        let store = makeStore()
+        store.setNextGoal(NextGoal(name: "春のハーフ", date: Plan.date(2026, 11, 26)))
+        store.record(RunLog(type: .run, km: 42.2), on: Plan.race)           // 岡山の本番は含めない
+        achieve(week: 18, in: store)                                       // 11/10, 11/12
+        store.record(RunLog(type: .run, km: 8), on: Plan.date(2026, 11, 16))
+        store.recordStrength(strength(.lower), on: Plan.date(2026, 11, 17)) // 筋トレだけの日は数えない
+        store.record(RunLog(type: .run, km: 21.1), on: Plan.date(2026, 11, 26))
+        store.record(RunLog(type: .run, km: 5), on: Plan.date(2026, 11, 28)) // 目標日の後
+
+        let training = store.nextGoalTraining(today: Plan.date(2026, 11, 30))
+
+        XCTAssertEqual(training?.weeks, [18, 19, 20])
+        XCTAssertEqual(training?.runs, 4)
+        XCTAssertEqual(training?.km, 29.1)
+        XCTAssertEqual(training?.weeksLeft, 0)
+    }
+
+    func testNextGoalTrainingShowsWeeksLeftAndNilWithoutGoal() {
+        let store = makeStore()
+        XCTAssertNil(store.nextGoalTraining(today: Plan.date(2026, 11, 17)))
+
+        store.setNextGoal(NextGoal(name: "神戸マラソン 2027", date: Plan.date(2027, 11, 21)))
+        let training = store.nextGoalTraining(today: Plan.date(2026, 11, 17))
+
+        XCTAssertEqual(training?.weeks, [18, 19])
+        XCTAssertEqual(training?.weeksLeft, 52)
+        // カレンダーは目標日の週まで先に並べる
+        XCTAssertEqual(training?.plannedWeeks.first, 18)
+        XCTAssertEqual(training?.plannedWeeks.last, 71)
+        XCTAssertEqual(store.weekDates(71).last, Plan.date(2027, 11, 21))
+    }
+
     // MARK: - Helpers
 
     private func achieve(week: Int, in store: TrackerStore) {

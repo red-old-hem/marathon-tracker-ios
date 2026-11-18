@@ -229,6 +229,45 @@ final class StrengthProgramTests: XCTestCase {
                        StrengthExercise(name: "チェストプレス", weightKg: 32, reps: 10, sets: 2))
     }
 
+    func testChosenRecommendedExercisesStayDraftUntilSavedAndMergeWithoutOverwriting() {
+        let store = makeStore()
+        let day = Plan.date(2026, 11, 16)
+        let existing = StrengthLog(category: .upper, exercises: [
+            StrengthExercise(name: "チェストプレス", weightKg: 42.5, reps: 8, sets: 3)
+        ], rpe: 7)
+        store.recordStrength(existing, on: day)
+        let selected = StrengthLog(category: .upper, templateName: "上半身プッシュ", exercises: [
+            StrengthExercise(name: "チェストプレス", weightKg: 40, reps: 10, sets: 3),
+            StrengthExercise(name: "ペクトルフライ", weightKg: 20, reps: 12, sets: 2)
+        ])
+        let draft = existing.addingRecommendedExercises(selected)
+
+        XCTAssertEqual(store.log(on: day)?.strength, existing)
+        XCTAssertEqual(draft.exercises.count, 2)
+        XCTAssertEqual(draft.exercises[0].weightKg, 42.5)
+        XCTAssertEqual(draft.exercises[1].name, "ペクトルフライ")
+        XCTAssertEqual(draft.rpe, 7)
+        XCTAssertEqual(draft.templateName, "上半身プッシュ")
+        let partial = StrengthLog(category: .upper, exercises: [selected.exercises[0]])
+        XCTAssertNil(existing.addingRecommendedExercises(partial).templateName)
+    }
+
+    func testPreparedWeeklyMenuShowsMachinesAndLastWeights() {
+        let store = makeStore()
+        let start = Plan.date(2026, 11, 16)
+        store.startStrengthProgram(on: start)
+        logMachine("チェストプレス", weight: 40, reps: 10, sets: 3,
+                   on: Plan.date(2026, 11, 9), in: store)
+
+        let menu = store.preparedStrengthTemplate(named: "全身マシン30分", on: start)!
+        XCTAssertEqual(menu.exercises.map(\.name),
+                       ["レッグプレス", "チェストプレス", "ラットプルダウン", "ケーブル・クランチ"])
+        XCTAssertEqual(menu.exercises[1].weightKg, 40)
+        XCTAssertEqual(menu.exercises[1].reps, 12)
+        XCTAssertEqual(menu.exercises[1].sets, 2)
+        XCTAssertNil(menu.exercises[0].weightKg)
+    }
+
     func testTemplateExercisesGetLastWeight() {
         let store = makeStore()
         logMachine("レッグプレス", weight: 80, reps: 10, sets: 3, on: Plan.date(2026, 11, 9), in: store)

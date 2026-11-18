@@ -101,6 +101,23 @@ final class TrackerStoreTests: XCTestCase {
         XCTAssertEqual(store.recentStrengthDays(), [bothDay, strengthDay])
     }
 
+    func testPreviousStrengthUsesOnlyEarlierSavedSession() {
+        let store = makeStore()
+        let first = Plan.date(2026, 11, 10)
+        let second = Plan.date(2026, 11, 12)
+        let target = Plan.date(2026, 11, 13)
+        store.recordStrength(strength(.upper), on: first)
+        store.recordStrength(strength(.lower), on: second)
+        store.recordStrength(strength(.core), on: target)
+
+        XCTAssertEqual(store.previousStrength(before: target), strength(.lower))
+        XCTAssertEqual(store.previousStrength(before: second), strength(.upper))
+        XCTAssertNil(store.previousStrength(before: first))
+        let blankDay = Plan.date(2026, 11, 14)
+        XCTAssertNotNil(store.previousStrength(before: blankDay))
+        XCTAssertNil(store.log(on: blankDay))
+    }
+
     private func isolatedDefaults() -> UserDefaults {
         let name = "MarathonTrackerTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
