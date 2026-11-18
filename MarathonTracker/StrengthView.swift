@@ -4,22 +4,146 @@ import SwiftUI
 
 struct StrengthView: View {
     @EnvironmentObject private var store: TrackerStore
+    @State private var selectedDay = Plan.calendar.startOfDay(for: Date())
 
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
-                Text("筋トレ")
-                    .font(.title2.bold())
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 8)
-                StrengthCard()
+                Text("筋トレ").font(.title2.bold()).frame(maxWidth: .infinity, alignment: .leading)
+                StrengthWeekStrip(selectedDay: $selectedDay)
+                StrengthDailyCard(day: selectedDay)
                 StrengthMenuCard()
-                StrengthHistoryCard()
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
         }
         .background(Color(.systemGroupedBackground))
+    }
+}
+
+struct StrengthWeekStrip: View {
+    @EnvironmentObject private var store: TrackerStore
+    @Binding var selectedDay: Date
+
+    private var today: Date { Plan.calendar.startOfDay(for: Date()) }
+    private var monday: Date { TrackerStore.monday(of: selectedDay) }
+    private let weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Button { moveWeek(-1) } label: { Image(systemName: "chevron.left") }
+                    .accessibilityLabel("前の週")
+                Spacer()
+                Text(monday.formatted(.dateTime.year().month().day()) + " の週")
+                    .font(.subheadline.bold())
+                Spacer()
+                Button { moveWeek(1) } label: { Image(systemName: "chevron.right") }
+                    .disabled(Plan.calendar.date(byAdding: .day, value: 7, to: monday)! > today)
+                    .accessibilityLabel("次の週")
+            }
+            .buttonStyle(.borderless)
+            HStack(spacing: 4) {
+                ForEach(0..<7, id: \.self) { offset in
+                    let day = Plan.calendar.date(byAdding: .day, value: offset, to: monday)!
+                    Button {
+                        selectedDay = day
+                    } label: {
+                        VStack(spacing: 4) {
+                            Text(weekdays[offset]).font(.caption2)
+                            Text(day.formatted(.dateTime.day())).font(.subheadline.bold())
+                            Circle().fill(store.log(on: day)?.strength == nil ? Color.clear : Color.teal)
+                                .frame(width: 5, height: 5)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background(Plan.calendar.isDate(day, inSameDayAs: selectedDay) ? Color.teal.opacity(0.16) : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 9))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(day > today)
+                    .accessibilityLabel(day.formatted(date: .abbreviated, time: .omitted) + (store.log(on: day)?.strength == nil ? "" : " 筋トレ記録あり"))
+                }
+            }
+            DatePicker("別の日へ", selection: $selectedDay, in: ...today, displayedComponents: .date)
+                .font(.caption)
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func moveWeek(_ direction: Int) {
+        let next = Plan.calendar.date(byAdding: .day, value: direction * 7, to: selectedDay)!
+        selectedDay = min(next, today)
+    }
+}
+
+struct StrengthDailyCard: View {
+    @EnvironmentObject private var store: TrackerStore
+    let day: Date
+    @State private var showingEditor = false
+    @State private var copyPrevious = false
+
+    private var strength: StrengthLog? { store.log(on: day)?.strength }
+    private var previous: StrengthLog? { store.previousStrength(before: day) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(day.formatted(.dateTime.month().day().weekday(.wide))).font(.headline)
+                Spacer()
+                if let strength {
+                    Text(strength.category.label).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if let strength {
+                if let name = strength.templateName {
+                    Text(name).font(.subheadline).foregroundStyle(.secondary)
+                }
+                ForEach(strength.exercises.indices, id: \.self) { index in
+                    let exercise = strength.exercises[index]
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(exercise.name).font(.subheadline)
+                        Spacer(minLength: 6)
+                        Text(exercise.weightKg.map { "\(Format.km($0))kg" } ?? "自重")
+                        Text("\(exercise.reps)回 × \(exercise.sets)")
+                    }
+                    .font(.caption.monospacedDigit())
+                    if index < strength.exercises.count - 1 { Divider() }
+                }
+                if let rpe = strength.rpe {
+                    Text("きつさ RPE \(rpe)").font(.caption).foregroundStyle(.secondary)
+                }
+                Button("この日の記録を編集") {
+                    copyPrevious = false
+                    showingEditor = true
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Text("この日の筋トレはまだ記録されていません")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Button("この日に行った筋トレを記録") {
+                    copyPrevious = false
+                    showingEditor = true
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.teal)
+                if previous != nil {
+                    Button("前回と同じ内容から始める") {
+                        copyPrevious = true
+                        showingEditor = true
+                    }
+                    .font(.subheadline)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .sheet(isPresented: $showingEditor) {
+            StrengthLogEditor(date: day, initialStrength: copyPrevious ? previous : nil)
+                .environmentObject(store)
+        }
     }
 }
 
@@ -198,13 +322,18 @@ struct StrengthCard: View {
 
 // MARK: - 筋トレメニュー
 
+private struct StrengthMenuDraft: Identifiable {
+    let id = UUID()
+    let log: StrengthLog
+}
+
 struct StrengthMenuCard: View {
     @EnvironmentObject private var store: TrackerStore
-    @State private var editorTemplate: StrengthTemplate?
+    @State private var editorDraft: StrengthMenuDraft?
+    @State private var selectedExercises: [String: Set<Int>] = [:]
     @State private var confirmingStop = false
 
     private var today: Date { Plan.calendar.startOfDay(for: Date()) }
-    private var loggedToday: Bool { store.log(on: today)?.strength != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -222,8 +351,8 @@ struct StrengthMenuCard: View {
         }
         .padding(16)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-        .sheet(item: $editorTemplate) { template in
-            StrengthLogEditor(date: today, initialTemplate: template)
+        .sheet(item: $editorDraft, onDismiss: { selectedExercises.removeAll() }) { draft in
+            StrengthLogEditor(date: today, initialStrength: draft.log, mergeInitialStrength: true)
                 .environmentObject(store)
         }
         .confirmationDialog("筋トレプログラムをやめますか？", isPresented: $confirmingStop, titleVisibility: .visible) {
@@ -263,32 +392,78 @@ struct StrengthMenuCard: View {
             }
             .font(.caption)
 
-            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                Button {
-                    editorTemplate = store.strengthProgramTemplate(named: item.label, on: today)
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(item.done ? .green : Color(.systemGray4))
-                        Text(item.label)
-                            .strikethrough(item.done)
-                            .foregroundStyle(item.done ? .secondary : .primary)
-                        Spacer()
-                        if !item.done && !loggedToday {
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
+            ForEach(Array(items.enumerated()), id: \.offset) { sessionIndex, item in
+                if let template = store.preparedStrengthTemplate(named: item.label, on: today) {
+                    let selectionKey = "\(week):\(sessionIndex)"
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(item.done ? .green : Color(.systemGray4))
+                            Text(item.label)
+                                .font(.subheadline.bold())
+                            if item.done {
+                                Text("記録済み").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        ForEach(template.exercises.indices, id: \.self) { index in
+                            let exercise = template.exercises[index]
+                            let selected = selectedExercises[selectionKey, default: []].contains(index)
+                            let recorded = store.log(on: today)?.strength?.exercises.contains { $0.name == exercise.name } == true
+                            Button {
+                                if selected {
+                                    selectedExercises[selectionKey, default: []].remove(index)
+                                } else {
+                                    selectedExercises[selectionKey, default: []].insert(index)
+                                }
+                            } label: {
+                                HStack(alignment: .top, spacing: 9) {
+                                    Image(systemName: selected ? "checkmark.square.fill" : "square")
+                                        .foregroundStyle(selected ? .teal : .secondary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(exercise.name)
+                                        Text("\(exercise.weightKg.map { "目安 \(Format.km($0))kg" } ?? "重量は当日設定") · \(exercise.reps)回×\(exercise.sets)セット")
+                                            .foregroundStyle(.secondary)
+                                        if recorded {
+                                            Text("今日の記録にあり")
+                                                .foregroundStyle(.green)
+                                        }
+                                    }
+                                    .font(.caption)
+                                    Spacer(minLength: 0)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(item.done)
+                            .accessibilityLabel("\(exercise.name)を\(selected ? "選択解除" : "選択")\(recorded ? "、今日の記録にあり" : "")")
+                        }
+                        if !item.done, let selected = selectedExercises[selectionKey], !selected.isEmpty {
+                            Button {
+                                let chosen = template.exercises.indices.filter { selected.contains($0) }
+                                    .map { template.exercises[$0] }
+                                let log = StrengthLog(category: template.category,
+                                                      templateName: chosen.count == template.exercises.count ? template.name : nil,
+                                                      exercises: chosen)
+                                editorDraft = StrengthMenuDraft(log: log)
+                            } label: {
+                                Label("選んだ\(selected.count)種目を今日の記録へ", systemImage: "square.and.pencil")
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.teal)
                         }
                     }
-                    .font(.subheadline)
-                    .contentShape(Rectangle())
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.systemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
                 }
-                .buttonStyle(.plain)
-                // 今日すでに記録済みなら、上書きを避けて上の筋トレカードから編集してもらう
-                .disabled(item.done || loggedToday)
-                .accessibilityHint(item.done ? "消化済み" : "このメニューで今日の筋トレを記録")
             }
+            Text("実際に行った種目を選び、重量・回数を確認して保存すると当日の記録になります")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
+            Text("重量は同じマシンの前回記録から表示。記録がなければ当日決めてください")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             Text(plan.tip)
                 .font(.caption)
                 .padding(10)
@@ -385,7 +560,10 @@ struct StrengthLogEditor: View {
 
     let date: Date
     let initialTemplate: StrengthTemplate?
+    let initialStrength: StrengthLog?
+    let mergeInitialStrength: Bool
 
+    @State private var expandedExercise: Int?
     @State private var category: StrengthCategory = .full
     @State private var templateName: String?
     @State private var exercises: [StrengthExercise] = []
@@ -394,9 +572,12 @@ struct StrengthLogEditor: View {
     @State private var errorMessage: String?
     @State private var loaded = false
 
-    init(date: Date, initialTemplate: StrengthTemplate? = nil) {
+    init(date: Date, initialTemplate: StrengthTemplate? = nil, initialStrength: StrengthLog? = nil,
+         mergeInitialStrength: Bool = false) {
         self.date = date
         self.initialTemplate = initialTemplate
+        self.initialStrength = initialStrength
+        self.mergeInitialStrength = mergeInitialStrength
     }
 
     private var existingStrength: StrengthLog? { store.log(on: date)?.strength }
@@ -436,39 +617,53 @@ struct StrengthLogEditor: View {
 
                 Section("種目") {
                     ForEach(exercises.indices, id: \.self) { index in
-                        VStack(alignment: .leading, spacing: 8) {
+                        DisclosureGroup(isExpanded: Binding(
+                            get: { expandedExercise == index },
+                            set: { expandedExercise = $0 ? index : nil }
+                        )) {
                             HStack {
                                 TextField("種目名", text: $exercises[index].name)
                                 Button(role: .destructive) {
                                     exercises.remove(at: index)
+                                    expandedExercise = nil
                                 } label: {
                                     Image(systemName: "trash")
                                 }
-                                .accessibilityLabel("\(exercises[index].name.isEmpty ? "種目" : exercises[index].name)を削除")
+                                .accessibilityLabel("種目を削除")
                             }
-                            TextField("重量 kg（自重なら空欄）", text: weightBinding(for: index))
-                                .keyboardType(.decimalPad)
                             HStack {
-                                Stepper("\(exercises[index].sets)セット", value: $exercises[index].sets, in: 1...20)
-                                Stepper("\(exercises[index].reps)回", value: $exercises[index].reps, in: 1...100)
+                                TextField("重量 kg（自重なら空欄）", text: weightBinding(for: index))
+                                    .keyboardType(.decimalPad)
+                                Button("−2.5") { adjustWeight(at: index, by: -2.5) }
+                                    .buttonStyle(.bordered)
+                                Button("+2.5") { adjustWeight(at: index, by: 2.5) }
+                                    .buttonStyle(.bordered)
                             }
-                            .font(.subheadline)
+                            Stepper("\(exercises[index].sets)セット", value: $exercises[index].sets, in: 1...20)
+                            Stepper("\(exercises[index].reps)回", value: $exercises[index].reps, in: 1...100)
+                        } label: {
+                            HStack {
+                                Text(exercises[index].name.isEmpty ? "新しい種目" : exercises[index].name)
+                                Spacer()
+                                Text("\(exercises[index].weightKg.map { Format.km($0) + "kg" } ?? "自重") · \(exercises[index].reps)回×\(exercises[index].sets)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         }
-                        .padding(.vertical, 4)
                     }
-
                     Menu {
                         ForEach(StrengthTemplate.machineGroups) { group in
                             Menu(group.name) {
                                 ForEach(group.machines, id: \.self) { machine in
                                     Button(machine) {
                                         exercises.append(store.suggestedExercise(named: machine, on: date))
+                                        expandedExercise = exercises.count - 1
                                     }
                                 }
                             }
                         }
                         Button("自由入力") {
                             exercises.append(StrengthExercise(name: "", reps: 10, sets: 3))
+                            expandedExercise = exercises.count - 1
                         }
                     } label: {
                         Label("種目を追加", systemImage: "plus")
@@ -476,13 +671,21 @@ struct StrengthLogEditor: View {
                 }
 
                 Section("主観的負荷") {
-                    Picker("RPE", selection: $rpe) {
-                        Text("未記録").tag(0)
-                        ForEach(1...10, id: \.self) { value in
-                            Text("\(value)").tag(value)
+                    HStack(spacing: 4) {
+                        ForEach(Array([("楽", 2), ("ふつう", 5), ("ややきつい", 7), ("きつい", 8), ("限界", 10)].enumerated()), id: \.offset) { _, option in
+                            Button(option.0) { rpe = option.1 }
+                                .font(.caption2)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 9)
+                                .background(rpeRange(rpe) == rpeRange(option.1) && rpe != 0 ? Color.teal.opacity(0.18) : Color.clear,
+                                            in: RoundedRectangle(cornerRadius: 8))
+                                .accessibilityAddTraits(rpeRange(rpe) == rpeRange(option.1) && rpe != 0 ? .isSelected : [])
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .buttonStyle(.plain)
+                    Button("きつさを未記録にする") { rpe = 0 }
+                        .font(.caption)
+                        .disabled(rpe == 0)
                     Text(rpe == 0 ? "主観的なきつさを残せます" : "RPE \(rpe): \(rpeDescription)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -536,11 +739,19 @@ struct StrengthLogEditor: View {
         guard !loaded else { return }
         loaded = true
         if let existingStrength {
-            category = existingStrength.category
-            templateName = existingStrength.templateName
-            exercises = existingStrength.exercises
-            rpe = existingStrength.rpe ?? 0
-            soreness = Set(existingStrength.soreness ?? [])
+            let draft = mergeInitialStrength && initialStrength != nil
+                ? existingStrength.addingRecommendedExercises(initialStrength!) : existingStrength
+            category = draft.category
+            templateName = draft.templateName
+            exercises = draft.exercises
+            rpe = draft.rpe ?? 0
+            soreness = Set(draft.soreness ?? [])
+        } else if let initialStrength {
+            category = initialStrength.category
+            templateName = initialStrength.templateName
+            exercises = initialStrength.exercises
+            rpe = 0
+            soreness = []
         } else if let initialTemplate {
             apply(initialTemplate)
         }
@@ -550,6 +761,22 @@ struct StrengthLogEditor: View {
         category = template.category
         templateName = template.name
         exercises = template.exercises.map { store.withLastWeight($0, on: date) }
+    }
+
+    private func rpeRange(_ value: Int) -> Int {
+        switch value {
+        case 1...3: return 1
+        case 4...6: return 2
+        case 7: return 3
+        case 8...9: return 4
+        case 10: return 5
+        default: return 0
+        }
+    }
+
+    private func adjustWeight(at index: Int, by delta: Double) {
+        let current = exercises[index].weightKg ?? 0
+        exercises[index].weightKg = max(0, current + delta)
     }
 
     private func weightBinding(for index: Int) -> Binding<String> {

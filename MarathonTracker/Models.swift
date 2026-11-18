@@ -20,6 +20,14 @@ enum Plan {
     static var start: Date { date(2026, 7, 6) }
     static var race: Date { date(2026, 11, 8) }
 
+    /// レース翌日以降。ラン画面は岡山のプランを離れて自由なトレーニングの記録になる
+    static func isAfterRace(_ date: Date) -> Bool {
+        calendar.startOfDay(for: date) > race
+    }
+
+    /// レース後の記録で選べるメニュー。先頭が既定値
+    static let freeMenus = ["イージーラン", "ペース走", "ロング走", "インターバル", "レース", "自由ラン"]
+
     static func date(_ y: Int, _ m: Int, _ d: Int) -> Date {
         calendar.date(from: DateComponents(year: y, month: m, day: d))!
     }
@@ -204,6 +212,20 @@ struct StrengthLog: Codable, Equatable {
     var rpe: Int? = nil
     /// 当日の筋肉痛・張り
     var soreness: [SorenessArea]? = nil
+}
+
+extension StrengthLog {
+    /// 推奨から選んだ種目を当日の記録に足す。同名の実績値は維持する。
+    func addingRecommendedExercises(_ selection: StrengthLog) -> StrengthLog {
+        var result = self
+        let existingNames = Set(exercises.map(\.name))
+        result.exercises += selection.exercises.filter { !existingNames.contains($0.name) }
+        if result.templateName == nil, let name = selection.templateName,
+           exercises.allSatisfy({ selection.exercises.map(\.name).contains($0.name) }) {
+            result.templateName = name
+        }
+        return result
+    }
 }
 
 struct StrengthMachineGroup: Identifiable {
@@ -462,6 +484,20 @@ struct PainWarning: Equatable {
     let part: BodyPart
     let count: Int
     var severe: Bool { count >= 3 }
+}
+
+/// 次の目標に向けたトレーニングの集計(期間から求めるので保存はしない)
+struct GoalTraining: Equatable {
+    let goal: NextGoal
+    /// Plan.weekIndex の週番号(古い順)。レース翌週〜今週(目標週まで)
+    let weeks: [Int]
+    let runs: Int
+    let km: Double
+    let achievedWeeks: Int
+    /// 目標の週まであと何週
+    let weeksLeft: Int
+    /// カレンダーに先に出しておく全期間の週番号(古い順)。レース翌週〜目標日の週
+    let plannedWeeks: [Int]
 }
 
 /// 完走済みのプランとは別に保持する次のレース目標。
@@ -851,6 +887,8 @@ final class TrackerStore: ObservableObject {
 
     /// その日が属する週の未消化メニューのうち先頭のもの
     private func nextMenu(on date: Date, in source: [String: RunLog]) -> String? {
+        // レース後はプランのメニューを割り当てない(ヘルスケアの自動記録も含む)
+        if Plan.isAfterRace(date) { return nil }
         let week = min(max(weekIndex(of: date), 0), Plan.weeks.count - 1)
         let counts = menuDoneCounts(week: week, in: source)
         var seen: [String: Int] = [:]
@@ -863,11 +901,59 @@ final class TrackerStore: ObservableObject {
 
     func nextMenu(on date: Date) -> String? { nextMenu(on: date, in: logs) }
 
+    /// 記録画面のメニュー選択肢。プラン期間はその週のメニュー、レース後は汎用メニュー
+    func menuOptions(on date: Date) -> [String] {
+        if Plan.isAfterRace(date) { return Plan.freeMenus }
+        let week = min(max(weekIndex(of: date), 0), Plan.weeks.count - 1)
+        return Plan.weeks[week].runs + ["メニュー外の自由ラン"]
+    }
+
+    /// 記録画面で最初に選ばれているメニュー
+    func defaultMenu(on date: Date) -> String {
+        if Plan.isAfterRace(date) { return Plan.freeMenus[0] }
+        return nextMenu(on: date) ?? "メニュー外の自由ラン"
+    }
+
+    /// 岡山マラソンの18週(7/6〜11/8)の集計
+    var planSummary: (runs: Int, km: Double, achievedWeeks: Int) {
+        let weeks = 0..<Plan.weeks.count
+        let logs = weeks.flatMap { weekLogs($0) }
+        let km = logs.compactMap(\.distanceKm).reduce(0, +)
+        return (logs.filter { $0.type == .run || $0.type == .mini }.count,
+                (km * 10).rounded() / 10,
+                weeks.filter(weekAchieved).count)
+    }
+
+    /// 次の目標に向けたトレーニングの集計。期間は岡山のレース翌週(月曜)から目標日まで
+    func nextGoalTraining(today: Date = Date()) -> GoalTraining? {
+        guard let goal = nextGoal else { return nil }
+        let first = Plan.weeks.count
+        let goalWeek = max(weekIndex(of: goal.date), first)
+        let current = weekIndex(of: today)
+        let weeks = current < first ? [] : Array(first...min(current, goalWeek))
+        let end = key(for: goal.date)
+        // 目標週の目標日より後は数えない
+        let inRange = weeks.flatMap { week in
+            weekDates(week).filter { key(for: $0) <= end }.compactMap { runLog(on: $0) }
+        }
+        let km = inRange.compactMap(\.distanceKm).reduce(0, +)
+        return GoalTraining(
+            goal: goal,
+            weeks: weeks,
+            runs: inRange.filter { $0.type == .run || $0.type == .mini }.count,
+            km: (km * 10).rounded() / 10,
+            achievedWeeks: weeks.filter(weekAchieved).count,
+            weeksLeft: max(goalWeek - current, 0),
+            plannedWeeks: Array(first...goalWeek)
+        )
+    }
+
     func streak(today: Date) -> Int {
         let cur = weekIndex(of: today)
         guard cur >= 0 else { return 0 }
         var count = 0
-        var w = min(cur, Plan.weeks.count - 1)
+        // レース後の週も月曜始まりで続けて数える
+        var w = cur
         while w >= 0 {
             if weekAchieved(w) {
                 count += 1
@@ -886,6 +972,13 @@ final class TrackerStore: ObservableObject {
     func runLog(on date: Date) -> RunLog? {
         guard let log = log(on: date), log.type != .strength else { return nil }
         return log
+    }
+
+    /// 指定日より前の、直近の筋トレ実績。コピー時も保存までは下書き。
+    func previousStrength(before date: Date) -> StrengthLog? {
+        let day = key(for: date)
+        return logs.keys.filter { $0 < day }.sorted(by: >)
+            .compactMap { logs[$0]?.strength }.first
     }
 
     /// 筋トレを記録した日(新しい順)
@@ -1097,6 +1190,13 @@ extension TrackerStore {
         let last = lastExercise(named: exercise.name, before: date)?.weightKg
         result.weightKg = activeStrengthWeek(of: date).map { weightForWeek(last, week: $0) } ?? last
         return result
+    }
+
+    /// 今週の一覧と記録画面で共通して使う、マシン名・量・前回重量の目安。
+    func preparedStrengthTemplate(named name: String, on date: Date) -> StrengthTemplate? {
+        guard let template = strengthProgramTemplate(named: name, on: date) else { return nil }
+        return StrengthTemplate(name: template.name, category: template.category,
+                                exercises: template.exercises.map { withLastWeight($0, on: date) })
     }
 
     /// 回復週は前回の重量から2割下げる(0.5kg単位)
