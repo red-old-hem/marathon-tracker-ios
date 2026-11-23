@@ -469,9 +469,14 @@ struct WeekStat: Identifiable {
     /// 距離と時間が両方揃ったログのみの合計(ペース算出用)
     let timedKm: Double
     let timedSeconds: Int
+    /// レース当日(岡山の本番・次の目標の開催日)の距離。目安との比較からは除く
+    var raceKm: Double = 0
 
     var id: Int { week }
     var label: String { "W\(week + 1)" }
+
+    /// 目安距離と比べる練習分の距離。レース週の目安は本番を含まないため
+    var trainingKm: Double { max(((actualKm - raceKm) * 10).rounded() / 10, 0) }
 
     /// 距離だけのログを混ぜると平均が壊れるので、揃っているログのみで算出
     var paceSecPerKm: Double? {
@@ -1433,9 +1438,18 @@ extension TrackerStore {
                 timedSeconds += sec
             }
         }
+        let raceKm = weekDates(week).filter(isRaceDay).compactMap { runLog(on: $0)?.distanceKm }.reduce(0, +)
         return WeekStat(week: week, phase: plan.phase, targetKm: plan.km,
                         actualKm: (actual * 10).rounded() / 10,
-                        timedKm: timedKm, timedSeconds: timedSeconds)
+                        timedKm: timedKm, timedSeconds: timedSeconds,
+                        raceKm: (raceKm * 10).rounded() / 10)
+    }
+
+    /// 岡山の本番か、次の目標の開催日
+    func isRaceDay(_ date: Date) -> Bool {
+        let cal = Plan.calendar
+        return cal.isDate(date, inSameDayAs: Plan.race)
+            || nextGoal.map { cal.isDate(date, inSameDayAs: $0.date) } == true
     }
 
     var weekStats: [WeekStat] { (0..<Plan.weeks.count).map { stat(week: $0) } }

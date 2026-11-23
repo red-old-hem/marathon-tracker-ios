@@ -239,7 +239,7 @@ struct NextGoalCard: View {
                     trainingSummary(training)
                 }
             } else {
-                Text("次のレースや挑戦を設定すると、レース後のランがその目標に向けたトレーニング記録になります")
+                Text("次のフルマラソンを設定すると、開催日に向けた練習プランと週ごとのメニューが表示されます")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Button("次の目標を設定") {
@@ -280,10 +280,23 @@ struct NextGoalCard: View {
     /// 目標に向けたトレーニングの積み上げ
     private func trainingSummary(_ training: GoalTraining) -> some View {
         HStack(spacing: 8) {
-            summaryItem("\(training.weeks.count)週目", "トレーニング")
+            weekSummaryItem(training)
             summaryItem("\(training.runs)回", "ラン")
             summaryItem("\(Format.km(training.km))km", "距離")
             summaryItem("\(training.achievedWeeks)週", "週2回達成")
+        }
+    }
+
+    /// 週の数え方はプランの表示(ヘッダー・今週のメニュー)にそろえる
+    @ViewBuilder
+    private func weekSummaryItem(_ training: GoalTraining) -> some View {
+        let current = store.weekIndex(of: today)
+        if let plan = store.goalPlan, let number = plan.number(of: current) {
+            summaryItem("第\(number)週", "プラン\(plan.count)週")
+        } else if let plan = store.goalPlan, current < plan.startWeek {
+            summaryItem("\(plan.startWeek - current)週後", "プラン開始")
+        } else {
+            summaryItem("\(training.weeks.count)週目", "レース後")
         }
     }
 
@@ -328,10 +341,14 @@ struct NextGoalEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("レース・挑戦") {
+                Section {
                     TextField("例: 神戸マラソン 2027", text: $name)
                     DatePicker("開催日", selection: $date, in: today..., displayedComponents: .date)
                     TextField("目標（任意・例: 4時間30分）", text: $target)
+                } header: {
+                    Text("フルマラソン")
+                } footer: {
+                    Text("開催日から逆算して、最大18週のフルマラソン練習プランを作ります。18週に満たない場合はプランの後半から始まります")
                 }
 
                 if store.nextGoal != nil {
@@ -700,9 +717,12 @@ struct GaugeCard: View {
         // レース後の週も月曜始まりで数える(目標距離はなし)
         let counted = inPlan || currentWeek >= Plan.weeks.count
         let runCount = counted ? store.weekLogs(currentWeek).count : 0
-        let km = counted ? store.weekKm(currentWeek) : 0
         // 岡山の18週と、次の目標のプラン期間だけ目安距離を出す
         let target: Double? = inPlan || currentWeek < 0 ? Plan.weeks[menuWeek].km : store.weekPlan(of: currentWeek)?.km
+        let stat = store.stat(week: currentWeek)
+        // レース週の目安は練習分だけなので、目安と比べるときは本番の距離を除く
+        let km = !counted ? 0 : (target == nil ? store.weekKm(currentWeek) : stat.trainingKm)
+        let excludesRace = counted && target != nil && stat.raceKm > 0
 
         VStack(spacing: 14) {
             VStack(spacing: 6) {
@@ -721,7 +741,7 @@ struct GaugeCard: View {
                     Text("今週の距離").font(.subheadline.bold())
                     Spacer()
                     if let target {
-                        Text("\((km * 10).rounded() / 10, format: .number) / \(target, format: .number)km 目安")
+                        Text("\((km * 10).rounded() / 10, format: .number) / \(target, format: .number)km 目安\(excludesRace ? "(本番を除く)" : "")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {

@@ -124,6 +124,42 @@ final class GoalPlanTests: XCTestCase {
         XCTAssertEqual(store.log(on: inPlan)?.menu, Plan.weeks[8].runs[0])
     }
 
+    // MARK: - レース週の目安
+
+    func testGoalRaceDayIsExcludedFromTrainingKm() {
+        let store = makeStore()
+        let startWeek = store.weekIndex(of: today)
+        let race = store.weekDates(startWeek + 9).last!
+        store.setNextGoal(NextGoal(name: "冬のフル", date: race, planStart: today))
+        let raceWeek = startWeek + 9
+        store.record(RunLog(type: .run, km: 5), on: store.weekDates(raceWeek)[1])
+        store.record(RunLog(type: .run, menu: "本番 42.195km!", km: 42.2), on: race)
+
+        let stat = store.stat(week: raceWeek)
+
+        XCTAssertEqual(stat.actualKm, 47.2, accuracy: 0.001, "棒グラフの実績は本番込み")
+        XCTAssertEqual(stat.raceKm, 42.2, accuracy: 0.001)
+        XCTAssertEqual(stat.trainingKm, 5, accuracy: 0.001, "目安12kmと比べるのは練習分")
+        XCTAssertEqual(stat.targetKm, 12)
+    }
+
+    func testOkayamaRaceDayIsAlsoExcluded() {
+        let store = makeStore()
+        store.record(RunLog(type: .run, km: 4), on: Plan.date(2026, 11, 4))
+        store.record(RunLog(type: .run, km: 42.2), on: Plan.race)
+
+        XCTAssertEqual(store.stat(week: 17).trainingKm, 4, accuracy: 0.001)
+        XCTAssertEqual(store.stat(week: 17).actualKm, 46.2, accuracy: 0.001)
+    }
+
+    func testOrdinaryWeekHasNoRaceKm() {
+        let store = makeStore()
+        store.record(RunLog(type: .run, km: 8), on: Plan.date(2026, 7, 7))
+
+        XCTAssertEqual(store.stat(week: 0).raceKm, 0)
+        XCTAssertEqual(store.stat(week: 0).trainingKm, 8, accuracy: 0.001)
+    }
+
     // MARK: - 保存時の開始週
 
     func testPlanStartIsKeptWhenRaceDateIsUnchanged() {

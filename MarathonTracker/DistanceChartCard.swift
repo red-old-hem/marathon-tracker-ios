@@ -135,8 +135,10 @@ struct DistanceChartCard: View {
     private var detailText: String {
         if let s = selected {
             let label = store.weekLabel(s.week)
-            var text = hasTarget(s.week) ? "\(label)  \(Format.km(s.actualKm)) / \(Format.km(s.targetKm))km"
+            // 目安との比較は練習分。本番の距離は別に添える
+            var text = hasTarget(s.week) ? "\(label)  \(Format.km(s.trainingKm)) / \(Format.km(s.targetKm))km"
                                          : "\(label)の週  \(Format.km(s.actualKm))km"
+            if hasTarget(s.week), s.raceKm > 0 { text += " +本番\(Format.km(s.raceKm))km" }
             if let pace = s.paceSecPerKm { text += "  \(Format.pace(pace))" }
             return text
         }
