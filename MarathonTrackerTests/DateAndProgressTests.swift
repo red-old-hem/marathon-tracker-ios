@@ -185,6 +185,17 @@ final class DateAndProgressTests: XCTestCase {
         XCTAssertEqual(store.weekDates(71).last, Plan.date(2027, 11, 21))
     }
 
+    func testWeekStatsAfterRaceUseMondayLabelAndActualKm() {
+        let store = makeStore()
+        store.record(RunLog(type: .run, km: 6), on: Plan.date(2026, 11, 17))
+        store.record(RunLog(type: .run, km: 8.5), on: Plan.date(2026, 11, 22))
+        store.record(RunLog(type: .run, km: 3), on: Plan.date(2026, 11, 23)) // 翌週
+
+        XCTAssertEqual(store.weekLabel(17), "W18")
+        XCTAssertEqual(store.weekLabel(19), "11/16")
+        XCTAssertEqual(store.stat(week: 19).actualKm, 14.5)
+    }
+
     // MARK: - Helpers
 
     private func achieve(week: Int, in store: TrackerStore) {

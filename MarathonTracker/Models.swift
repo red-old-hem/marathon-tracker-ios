@@ -1364,6 +1364,13 @@ extension TrackerStore {
 
     var weekStats: [WeekStat] { (0..<Plan.weeks.count).map { stat(week: $0) } }
 
+    /// 週の表示名。プランの週は W1〜W18、レース後の週はその週の月曜日(M/d)
+    func weekLabel(_ week: Int) -> String {
+        if week < Plan.weeks.count { return "W\(week + 1)" }
+        let c = Plan.calendar.dateComponents([.month, .day], from: weekDates(week)[0])
+        return "\(c.month ?? 0)/\(c.day ?? 0)"
+    }
+
     var totalKm: Double {
         (logs.values.compactMap(\.distanceKm).reduce(0, +) * 10).rounded() / 10
     }

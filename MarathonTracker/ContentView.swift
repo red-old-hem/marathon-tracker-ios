@@ -40,6 +40,9 @@ struct ContentView: View {
                     GaugeCard(currentWeek: currentWeek, menuWeek: menuWeek, inPlan: inPlan)
                     HealthCard()
                     StatsCard()
+                    if !postRaceChartWeeks.isEmpty {
+                        DistanceChartCard(weeks: postRaceChartWeeks)
+                    }
                     CalendarCard(title: postRaceCalendarTitle, weeks: postRaceWeeks)
                     OkayamaArchiveCard()
                     DataBackupCard()
@@ -69,6 +72,13 @@ struct ContentView: View {
     private var postRaceCalendarTitle: String {
         guard let goal = store.nextGoal else { return "レース後のトレーニング" }
         return "\(goal.name) に向けて"
+    }
+
+    /// 週別距離グラフはレース翌週〜今週(古い順、直近26週まで)。目標日を過ぎても今週まで出す
+    private var postRaceChartWeeks: [Int] {
+        let first = Plan.weeks.count
+        guard currentWeek >= first else { return [] }
+        return Array(max(first, currentWeek - 25)...currentWeek)
     }
 
     /// 次の目標があれば目標日の週まで先に並べる(18週カレンダーと同じく古い週が上)。
@@ -937,12 +947,7 @@ struct CalendarCard: View {
     }
 
     /// プランの週は W1〜W18、レース後は週の月曜の日付
-    private func weekLabel(_ week: Int) -> String {
-        if week < Plan.weeks.count { return "W\(week + 1)" }
-        let monday = store.weekDates(week)[0]
-        let c = Plan.calendar.dateComponents([.month, .day], from: monday)
-        return "\(c.month ?? 0)/\(c.day ?? 0)"
-    }
+    private func weekLabel(_ week: Int) -> String { store.weekLabel(week) }
 
     @ViewBuilder
     private func dayCell(_ day: Date) -> some View {
