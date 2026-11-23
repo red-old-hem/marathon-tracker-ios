@@ -38,6 +38,9 @@ struct ContentView: View {
                     PainBanner()
                     TodayCard()
                     GaugeCard(currentWeek: currentWeek, menuWeek: menuWeek, inPlan: inPlan)
+                    if let plan = store.weekPlan(of: currentWeek) {
+                        MenuCard(week: currentWeek, plan: plan)
+                    }
                     HealthCard()
                     StatsCard()
                     if !postRaceChartWeeks.isEmpty {
@@ -51,7 +54,7 @@ struct ContentView: View {
                     PainBanner()
                     TodayCard()
                     GaugeCard(currentWeek: currentWeek, menuWeek: menuWeek, inPlan: inPlan)
-                    MenuCard(menuWeek: menuWeek)
+                    MenuCard(week: menuWeek, plan: Plan.weeks[menuWeek])
                     MealCard()
                     HealthCard()
                     StatsCard()
@@ -106,6 +109,8 @@ struct HeaderView: View {
     private var isPostRace: Bool { today > Plan.race }
     private var nextGoal: NextGoal? { isPostRace ? store.nextGoal : nil }
     private var displayDate: Date { nextGoal?.date ?? Plan.race }
+    private var goalPlan: GoalPlan? { nextGoal == nil ? nil : store.goalPlan }
+    private var goalWeekPlan: WeekPlan? { goalPlan?.week(at: currentWeek) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -113,9 +118,10 @@ struct HeaderView: View {
                 Text(nextGoal?.name ?? "おかやまマラソン 2026")
                     .font(.headline)
                 Spacer()
-                Text(nextGoal != nil ? "次の目標"
+                Text(goalWeekPlan.map { Plan.phases[$0.phase] }
+                     ?? (nextGoal != nil ? "次の目標"
                      : isPostRace ? "レース後"
-                     : Plan.phases[Plan.weeks[min(max(currentWeek, 0), Plan.weeks.count - 1)].phase])
+                     : Plan.phases[Plan.weeks[min(max(currentWeek, 0), Plan.weeks.count - 1)].phase]))
                     .font(.caption.bold())
                     .padding(.horizontal, 10)
                     .padding(.vertical, 3)
@@ -149,13 +155,28 @@ struct HeaderView: View {
                             .frame(height: 6)
                     }
                 }
+            } else if let plan = goalPlan {
+                // 次の目標のプラン。後半だけ使う場合はその週数分だけ並ぶ
+                HStack(spacing: 3) {
+                    ForEach(plan.startWeek...plan.raceWeek, id: \.self) { week in
+                        Capsule()
+                            .fill(phaseColor(plan.week(at: week)?.phase ?? 0))
+                            .opacity(week <= currentWeek ? 1 : 0.25)
+                            .frame(height: 6)
+                    }
+                }
             }
         }
         .padding(.top, 8)
     }
 
     private var headerDetail: String {
-        if let goal = nextGoal { return goal.target ?? "開催日まで" }
+        if let goal = nextGoal {
+            if let plan = goalPlan, let number = plan.number(of: currentWeek) {
+                return "第\(number)週 / \(plan.count)週" + (goal.target.map { "・\($0)" } ?? "")
+            }
+            return goal.target ?? "開催日まで"
+        }
         return inPlan ? "第\(currentWeek + 1)週 / \(Plan.weeks.count)週" : (currentWeek < 0 ? "7/6(月)プラン開始" : "プラン終了")
     }
 }
@@ -203,6 +224,17 @@ struct NextGoalCard: View {
                         .font(.subheadline)
                         .foregroundStyle(.blue)
                 }
+                if let plan = store.goalPlan {
+                    planInfo(plan)
+                }
+                if let warning = store.goalPlanWarning(today: today) {
+                    Label(warning, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                }
                 if let training = store.nextGoalTraining(today: today) {
                     trainingSummary(training)
                 }
@@ -223,6 +255,26 @@ struct NextGoalCard: View {
             NextGoalEditor()
                 .environmentObject(store)
         }
+    }
+
+    /// 練習プランの期間。18週に満たない場合は岡山プランの後半を使う
+    private func planInfo(_ plan: GoalPlan) -> some View {
+        let start = store.weekDates(plan.startWeek)[0]
+        let current = store.weekIndex(of: today)
+        let detail = plan.isShortened
+            ? "\(plan.count)週(岡山18週の第\(plan.templateOffset + 1)週から)"
+            : "\(plan.count)週"
+        let status = current < plan.startWeek
+            ? "\(shortDate(start))(月)から開始"
+            : "\(shortDate(start))(月)開始"
+        return Label("練習プラン: \(detail)・\(status)", systemImage: "list.bullet.clipboard")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    private func shortDate(_ date: Date) -> String {
+        let c = Plan.calendar.dateComponents([.month, .day], from: date)
+        return "\(c.month ?? 0)/\(c.day ?? 0)"
     }
 
     /// 目標に向けたトレーニングの積み上げ
@@ -338,7 +390,8 @@ struct NextGoalEditor: View {
             return
         }
         store.setNextGoal(NextGoal(name: trimmedName, date: date,
-                                   target: trimmedTarget.isEmpty ? nil : trimmedTarget))
+                                   target: trimmedTarget.isEmpty ? nil : trimmedTarget,
+                                   planStart: store.planStartForGoal(date: date, today: today)))
         dismiss()
     }
 }
@@ -648,7 +701,8 @@ struct GaugeCard: View {
         let counted = inPlan || currentWeek >= Plan.weeks.count
         let runCount = counted ? store.weekLogs(currentWeek).count : 0
         let km = counted ? store.weekKm(currentWeek) : 0
-        let target: Double? = inPlan || currentWeek < 0 ? Plan.weeks[menuWeek].km : nil
+        // 岡山の18週と、次の目標のプラン期間だけ目安距離を出す
+        let target: Double? = inPlan || currentWeek < 0 ? Plan.weeks[menuWeek].km : store.weekPlan(of: currentWeek)?.km
 
         VStack(spacing: 14) {
             VStack(spacing: 6) {
@@ -691,14 +745,23 @@ struct GaugeCard: View {
 
 struct MenuCard: View {
     @EnvironmentObject private var store: TrackerStore
-    let menuWeek: Int
+    /// 通し週番号(岡山は0〜17、次の目標のプランは18以降)
+    let week: Int
+    let plan: WeekPlan
 
     var body: some View {
-        let plan = Plan.weeks[menuWeek]
-        let counts = store.menuDoneCounts(week: menuWeek)
+        let counts = store.menuDoneCounts(week: week)
 
         VStack(alignment: .leading, spacing: 10) {
-            Text("今週のメニュー").font(.subheadline.bold())
+            HStack {
+                Text("今週のメニュー").font(.subheadline.bold())
+                Spacer()
+                if let goalPlan = store.goalPlan, let number = goalPlan.number(of: week) {
+                    Text("第\(number)週 / \(goalPlan.count)週・\(Plan.phases[plan.phase])")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
             ForEach(Array(doneFlags(plan: plan, counts: counts).enumerated()), id: \.offset) { _, item in
                 HStack(spacing: 10) {
                     Image(systemName: item.done ? "checkmark.circle.fill" : "circle")

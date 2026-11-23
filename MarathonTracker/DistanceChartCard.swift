@@ -12,6 +12,11 @@ struct DistanceChartCard: View {
 
     private var isPlan: Bool { weeks.allSatisfy { $0 < Plan.weeks.count } }
 
+    /// 目安距離がある週(岡山の18週か、次の目標のプラン期間)
+    private func hasTarget(_ week: Int) -> Bool {
+        isPlan || store.weekPlan(of: week) != nil
+    }
+
     private var currentWeek: Int {
         store.weekIndex(of: Plan.calendar.startOfDay(for: Date()))
     }
@@ -62,14 +67,14 @@ struct DistanceChartCard: View {
                         y: .value("実績", stat.actualKm),
                         width: .ratio(0.68)
                     )
-                    // レース後はフェーズがないので1色
-                    .foregroundStyle((isPlan ? phaseColor(stat.phase) : Color.teal)
+                    // プラン外のレース後の週はフェーズがないので1色
+                    .foregroundStyle((hasTarget(stat.week) ? phaseColor(stat.phase) : Color.teal)
                         .opacity(stat.week == currentWeek ? 1 : 0.7))
                     .cornerRadius(2)
                 }
 
-                if isPlan {
-                ForEach(stats) { stat in
+                // 岡山の18週と、次の目標のプラン期間の週だけ目標線を引く
+                ForEach(stats.filter { hasTarget($0.week) }) { stat in
                     LineMark(
                         x: .value("週", store.weekLabel(stat.week)),
                         y: .value("目標", stat.targetKm),
@@ -78,7 +83,6 @@ struct DistanceChartCard: View {
                     .foregroundStyle(Color.secondary.opacity(0.8))
                     .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                     .interpolationMethod(.stepCenter)
-                }
                 }
 
                 if let selected {
@@ -115,7 +119,9 @@ struct DistanceChartCard: View {
             // chartXSelection は横ドラッグで反応する(縦ドラッグは ScrollView に流れる)。
             // タップでは選択されないので「なぞる」と案内する
             Text(isPlan ? "棒=実績(色はフェーズ) / 破線=目標。横になぞると週ごとの詳細"
-                        : "横軸は週の月曜日。横になぞると週ごとの詳細")
+                 : stats.contains(where: { hasTarget($0.week) })
+                    ? "横軸は週の月曜日。破線=次の目標のプランの目安。横になぞると週ごとの詳細"
+                    : "横軸は週の月曜日。横になぞると週ごとの詳細")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -129,8 +135,8 @@ struct DistanceChartCard: View {
     private var detailText: String {
         if let s = selected {
             let label = store.weekLabel(s.week)
-            var text = isPlan ? "\(label)  \(Format.km(s.actualKm)) / \(Format.km(s.targetKm))km"
-                              : "\(label)の週  \(Format.km(s.actualKm))km"
+            var text = hasTarget(s.week) ? "\(label)  \(Format.km(s.actualKm)) / \(Format.km(s.targetKm))km"
+                                         : "\(label)の週  \(Format.km(s.actualKm))km"
             if let pace = s.paceSecPerKm { text += "  \(Format.pace(pace))" }
             return text
         }

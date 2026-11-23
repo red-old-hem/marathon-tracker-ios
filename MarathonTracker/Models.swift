@@ -505,6 +505,33 @@ struct NextGoal: Codable, Equatable {
     var name: String
     var date: Date
     var target: String? = nil
+    /// 練習プランを始める週(保存時の今週の月曜)。旧データとの互換性のため Optional のまま末尾に追加する
+    var planStart: Date? = nil
+}
+
+/// 次の目標(フルマラソン)に向けた練習プラン。
+/// 目標日の週から逆算した最後のN週(最大18週)に、岡山18週プランの後半N週をそのまま当てる。
+/// 週番号は Plan.weekIndex の通し番号(レース後は18以上)
+struct GoalPlan: Equatable {
+    let startWeek: Int
+    let raceWeek: Int
+
+    var count: Int { raceWeek - startWeek + 1 }
+    /// 岡山18週の何週目(0始まり)から使っているか
+    var templateOffset: Int { Plan.weeks.count - count }
+    var isShortened: Bool { count < Plan.weeks.count }
+    var firstWeek: WeekPlan { Plan.weeks[templateOffset] }
+
+    /// 通し週番号に当たるプランの週。期間外は nil
+    func week(at week: Int) -> WeekPlan? {
+        guard (startWeek...raceWeek).contains(week) else { return nil }
+        return Plan.weeks[templateOffset + week - startWeek]
+    }
+
+    /// プランの何週目か(1始まり)。期間外は nil
+    func number(of week: Int) -> Int? {
+        (startWeek...raceWeek).contains(week) ? week - startWeek + 1 : nil
+    }
 }
 
 struct TrackerBackupEnvelope: Codable {
@@ -887,12 +914,12 @@ final class TrackerStore: ObservableObject {
 
     /// その日が属する週の未消化メニューのうち先頭のもの
     private func nextMenu(on date: Date, in source: [String: RunLog]) -> String? {
-        // レース後はプランのメニューを割り当てない(ヘルスケアの自動記録も含む)
-        if Plan.isAfterRace(date) { return nil }
-        let week = min(max(weekIndex(of: date), 0), Plan.weeks.count - 1)
+        // レース後は次の目標のプラン期間だけメニューを割り当てる(ヘルスケアの自動記録も含む)
+        let week = Plan.isAfterRace(date) ? weekIndex(of: date) : min(max(weekIndex(of: date), 0), Plan.weeks.count - 1)
+        guard let plan = weekPlan(of: week) else { return nil }
         let counts = menuDoneCounts(week: week, in: source)
         var seen: [String: Int] = [:]
-        for run in Plan.weeks[week].runs {
+        for run in plan.runs {
             seen[run, default: 0] += 1
             if counts[run, default: 0] < seen[run]! { return run }
         }
@@ -901,17 +928,65 @@ final class TrackerStore: ObservableObject {
 
     func nextMenu(on date: Date) -> String? { nextMenu(on: date, in: logs) }
 
-    /// 記録画面のメニュー選択肢。プラン期間はその週のメニュー、レース後は汎用メニュー
+    /// 記録画面のメニュー選択肢。プラン期間はその週のメニュー、プラン外のレース後は汎用メニュー
     func menuOptions(on date: Date) -> [String] {
-        if Plan.isAfterRace(date) { return Plan.freeMenus }
+        if Plan.isAfterRace(date) {
+            guard let plan = weekPlan(of: weekIndex(of: date)) else { return Plan.freeMenus }
+            return plan.runs + ["メニュー外の自由ラン"]
+        }
         let week = min(max(weekIndex(of: date), 0), Plan.weeks.count - 1)
         return Plan.weeks[week].runs + ["メニュー外の自由ラン"]
     }
 
     /// 記録画面で最初に選ばれているメニュー
     func defaultMenu(on date: Date) -> String {
-        if Plan.isAfterRace(date) { return Plan.freeMenus[0] }
+        if Plan.isAfterRace(date), weekPlan(of: weekIndex(of: date)) == nil { return Plan.freeMenus[0] }
         return nextMenu(on: date) ?? "メニュー外の自由ラン"
+    }
+
+    // MARK: - 次の目標のプラン
+
+    /// 次の目標に向けたプラン。目標がなければ nil
+    var goalPlan: GoalPlan? {
+        guard let goal = nextGoal else { return nil }
+        let first = Plan.weeks.count
+        let raceWeek = max(weekIndex(of: goal.date), first)
+        let earliest = max(first, raceWeek - (Plan.weeks.count - 1))
+        let chosen = goal.planStart.map { weekIndex(of: $0) } ?? earliest
+        return GoalPlan(startWeek: min(max(chosen, earliest), raceWeek), raceWeek: raceWeek)
+    }
+
+    /// 通し週番号のプラン。岡山の18週は岡山、レース後は次の目標のプラン期間だけ
+    func weekPlan(of week: Int) -> WeekPlan? {
+        if week < Plan.weeks.count { return week >= 0 ? Plan.weeks[week] : nil }
+        return goalPlan?.week(at: week)
+    }
+
+    /// 次の目標の保存時に決めるプラン開始週(今週の月曜)。開催日が変わらない編集では元の値を保つ
+    func planStartForGoal(date: Date, today: Date) -> Date {
+        if let goal = nextGoal, let start = goal.planStart,
+           Plan.calendar.isDate(goal.date, inSameDayAs: date) {
+            return start
+        }
+        return Self.monday(of: today)
+    }
+
+    /// 後半から始まるプランで、直近の走行量が初週の目安より大きく少ないときの注意。
+    /// プランの中身は変えず、最初の2週(と開始前)だけ表示する
+    func goalPlanWarning(today: Date) -> String? {
+        guard let plan = goalPlan, plan.isShortened else { return nil }
+        let current = weekIndex(of: today)
+        guard current <= plan.startWeek + 1 else { return nil }
+        let cal = Plan.calendar
+        let day = cal.startOfDay(for: today)
+        let recentKm = (1...28).compactMap { offset -> Double? in
+            guard let date = cal.date(byAdding: .day, value: -offset, to: day) else { return nil }
+            return runLog(on: date)?.distanceKm
+        }.reduce(0, +)
+        let weeklyAverage = recentKm / 4
+        let firstKm = plan.firstWeek.km
+        guard weeklyAverage < firstKm * 0.6 else { return nil }
+        return "準備期間が\(plan.count)週のため、プランは岡山18週の第\(plan.templateOffset + 1)週から始まります。直近4週の平均は\(Format.km(weeklyAverage))km/週で初週の目安\(Format.km(firstKm))kmより少ないので、最初はイージーに置き換えて完走優先で"
     }
 
     /// 岡山マラソンの18週(7/6〜11/8)の集計
@@ -1328,7 +1403,8 @@ extension TrackerStore {
 
     private static func isValidGoal(_ value: NextGoal) -> Bool {
         !value.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        value.target?.count ?? 0 <= 80
+        value.target?.count ?? 0 <= 80 &&
+        (value.planStart.map { $0 <= value.date } ?? true)
     }
 
     private static func isValidDateKey(_ value: String) -> Bool {
@@ -1345,7 +1421,7 @@ extension TrackerStore {
 
 extension TrackerStore {
     func stat(week: Int) -> WeekStat {
-        let plan = Plan.weeks[min(max(week, 0), Plan.weeks.count - 1)]
+        let plan = weekPlan(of: week) ?? Plan.weeks[min(max(week, 0), Plan.weeks.count - 1)]
         var actual = 0.0
         var timedKm = 0.0
         var timedSeconds = 0
