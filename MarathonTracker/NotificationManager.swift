@@ -36,10 +36,12 @@ enum NotificationManager {
                      title: "今日の30秒メモ", body: "少し面白かった作業と、消耗した作業を一語ずつ残そう")
         }
 
-        guard today <= Plan.race else { return }
+        // 岡山のレースまで。レース後は次の目標の開催日まで(目標がなければラン通知はなし)
+        let lastDay = Plan.isAfterRace(today) ? store.nextGoal.map { cal.startOfDay(for: $0.date) } : Plan.race
+        guard let lastDay, today <= lastDay else { return }
 
         for offset in 0..<14 {
-            guard let day = cal.date(byAdding: .day, value: offset, to: today), day <= Plan.race else { continue }
+            guard let day = cal.date(byAdding: .day, value: offset, to: today), day <= lastDay else { continue }
             guard store.log(on: day) == nil else { continue }
             let weekday = cal.component(.weekday, from: day)
 

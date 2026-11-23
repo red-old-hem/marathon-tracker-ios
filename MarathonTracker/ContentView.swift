@@ -38,8 +38,14 @@ struct ContentView: View {
                     PainBanner()
                     TodayCard()
                     GaugeCard(currentWeek: currentWeek, menuWeek: menuWeek, inPlan: inPlan)
+                    if let plan = store.weekPlan(of: currentWeek) {
+                        MenuCard(week: currentWeek, plan: plan)
+                    }
                     HealthCard()
                     StatsCard()
+                    if !postRaceChartWeeks.isEmpty {
+                        DistanceChartCard(weeks: postRaceChartWeeks)
+                    }
                     CalendarCard(title: postRaceCalendarTitle, weeks: postRaceWeeks)
                     OkayamaArchiveCard()
                     DataBackupCard()
@@ -48,7 +54,7 @@ struct ContentView: View {
                     PainBanner()
                     TodayCard()
                     GaugeCard(currentWeek: currentWeek, menuWeek: menuWeek, inPlan: inPlan)
-                    MenuCard(menuWeek: menuWeek)
+                    MenuCard(week: menuWeek, plan: Plan.weeks[menuWeek])
                     MealCard()
                     HealthCard()
                     StatsCard()
@@ -69,6 +75,13 @@ struct ContentView: View {
     private var postRaceCalendarTitle: String {
         guard let goal = store.nextGoal else { return "レース後のトレーニング" }
         return "\(goal.name) に向けて"
+    }
+
+    /// 週別距離グラフはレース翌週〜今週(古い順、直近26週まで)。目標日を過ぎても今週まで出す
+    private var postRaceChartWeeks: [Int] {
+        let first = Plan.weeks.count
+        guard currentWeek >= first else { return [] }
+        return Array(max(first, currentWeek - 25)...currentWeek)
     }
 
     /// 次の目標があれば目標日の週まで先に並べる(18週カレンダーと同じく古い週が上)。
@@ -96,6 +109,8 @@ struct HeaderView: View {
     private var isPostRace: Bool { today > Plan.race }
     private var nextGoal: NextGoal? { isPostRace ? store.nextGoal : nil }
     private var displayDate: Date { nextGoal?.date ?? Plan.race }
+    private var goalPlan: GoalPlan? { nextGoal == nil ? nil : store.goalPlan }
+    private var goalWeekPlan: WeekPlan? { goalPlan?.week(at: currentWeek) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -103,9 +118,10 @@ struct HeaderView: View {
                 Text(nextGoal?.name ?? "おかやまマラソン 2026")
                     .font(.headline)
                 Spacer()
-                Text(nextGoal != nil ? "次の目標"
+                Text(goalWeekPlan.map { Plan.phases[$0.phase] }
+                     ?? (nextGoal != nil ? "次の目標"
                      : isPostRace ? "レース後"
-                     : Plan.phases[Plan.weeks[min(max(currentWeek, 0), Plan.weeks.count - 1)].phase])
+                     : Plan.phases[Plan.weeks[min(max(currentWeek, 0), Plan.weeks.count - 1)].phase]))
                     .font(.caption.bold())
                     .padding(.horizontal, 10)
                     .padding(.vertical, 3)
@@ -139,13 +155,28 @@ struct HeaderView: View {
                             .frame(height: 6)
                     }
                 }
+            } else if let plan = goalPlan {
+                // 次の目標のプラン。後半だけ使う場合はその週数分だけ並ぶ
+                HStack(spacing: 3) {
+                    ForEach(plan.startWeek...plan.raceWeek, id: \.self) { week in
+                        Capsule()
+                            .fill(phaseColor(plan.week(at: week)?.phase ?? 0))
+                            .opacity(week <= currentWeek ? 1 : 0.25)
+                            .frame(height: 6)
+                    }
+                }
             }
         }
         .padding(.top, 8)
     }
 
     private var headerDetail: String {
-        if let goal = nextGoal { return goal.target ?? "開催日まで" }
+        if let goal = nextGoal {
+            if let plan = goalPlan, let number = plan.number(of: currentWeek) {
+                return "第\(number)週 / \(plan.count)週" + (goal.target.map { "・\($0)" } ?? "")
+            }
+            return goal.target ?? "開催日まで"
+        }
         return inPlan ? "第\(currentWeek + 1)週 / \(Plan.weeks.count)週" : (currentWeek < 0 ? "7/6(月)プラン開始" : "プラン終了")
     }
 }
@@ -193,11 +224,22 @@ struct NextGoalCard: View {
                         .font(.subheadline)
                         .foregroundStyle(.blue)
                 }
+                if let plan = store.goalPlan {
+                    planInfo(plan)
+                }
+                if let warning = store.goalPlanWarning(today: today) {
+                    Label(warning, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                }
                 if let training = store.nextGoalTraining(today: today) {
                     trainingSummary(training)
                 }
             } else {
-                Text("次のレースや挑戦を設定すると、レース後のランがその目標に向けたトレーニング記録になります")
+                Text("次のフルマラソンを設定すると、開催日に向けた練習プランと週ごとのメニューが表示されます")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Button("次の目標を設定") {
@@ -215,13 +257,46 @@ struct NextGoalCard: View {
         }
     }
 
+    /// 練習プランの期間。18週に満たない場合は岡山プランの後半を使う
+    private func planInfo(_ plan: GoalPlan) -> some View {
+        let start = store.weekDates(plan.startWeek)[0]
+        let current = store.weekIndex(of: today)
+        let detail = plan.isShortened
+            ? "\(plan.count)週(岡山18週の第\(plan.templateOffset + 1)週から)"
+            : "\(plan.count)週"
+        let status = current < plan.startWeek
+            ? "\(shortDate(start))(月)から開始"
+            : "\(shortDate(start))(月)開始"
+        return Label("練習プラン: \(detail)・\(status)", systemImage: "list.bullet.clipboard")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    private func shortDate(_ date: Date) -> String {
+        let c = Plan.calendar.dateComponents([.month, .day], from: date)
+        return "\(c.month ?? 0)/\(c.day ?? 0)"
+    }
+
     /// 目標に向けたトレーニングの積み上げ
     private func trainingSummary(_ training: GoalTraining) -> some View {
         HStack(spacing: 8) {
-            summaryItem("\(training.weeks.count)週目", "トレーニング")
+            weekSummaryItem(training)
             summaryItem("\(training.runs)回", "ラン")
             summaryItem("\(Format.km(training.km))km", "距離")
             summaryItem("\(training.achievedWeeks)週", "週2回達成")
+        }
+    }
+
+    /// 週の数え方はプランの表示(ヘッダー・今週のメニュー)にそろえる
+    @ViewBuilder
+    private func weekSummaryItem(_ training: GoalTraining) -> some View {
+        let current = store.weekIndex(of: today)
+        if let plan = store.goalPlan, let number = plan.number(of: current) {
+            summaryItem("第\(number)週", "プラン\(plan.count)週")
+        } else if let plan = store.goalPlan, current < plan.startWeek {
+            summaryItem("\(plan.startWeek - current)週後", "プラン開始")
+        } else {
+            summaryItem("\(training.weeks.count)週目", "レース後")
         }
     }
 
@@ -266,10 +341,14 @@ struct NextGoalEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("レース・挑戦") {
+                Section {
                     TextField("例: 神戸マラソン 2027", text: $name)
                     DatePicker("開催日", selection: $date, in: today..., displayedComponents: .date)
                     TextField("目標（任意・例: 4時間30分）", text: $target)
+                } header: {
+                    Text("フルマラソン")
+                } footer: {
+                    Text("開催日から逆算して、最大18週のフルマラソン練習プランを作ります。18週に満たない場合はプランの後半から始まります")
                 }
 
                 if store.nextGoal != nil {
@@ -328,7 +407,8 @@ struct NextGoalEditor: View {
             return
         }
         store.setNextGoal(NextGoal(name: trimmedName, date: date,
-                                   target: trimmedTarget.isEmpty ? nil : trimmedTarget))
+                                   target: trimmedTarget.isEmpty ? nil : trimmedTarget,
+                                   planStart: store.planStartForGoal(date: date, today: today)))
         dismiss()
     }
 }
@@ -637,8 +717,12 @@ struct GaugeCard: View {
         // レース後の週も月曜始まりで数える(目標距離はなし)
         let counted = inPlan || currentWeek >= Plan.weeks.count
         let runCount = counted ? store.weekLogs(currentWeek).count : 0
-        let km = counted ? store.weekKm(currentWeek) : 0
-        let target: Double? = inPlan || currentWeek < 0 ? Plan.weeks[menuWeek].km : nil
+        // 岡山の18週と、次の目標のプラン期間だけ目安距離を出す
+        let target: Double? = inPlan || currentWeek < 0 ? Plan.weeks[menuWeek].km : store.weekPlan(of: currentWeek)?.km
+        let stat = store.stat(week: currentWeek)
+        // レース週の目安は練習分だけなので、目安と比べるときは本番の距離を除く
+        let km = !counted ? 0 : (target == nil ? store.weekKm(currentWeek) : stat.trainingKm)
+        let excludesRace = counted && target != nil && stat.raceKm > 0
 
         VStack(spacing: 14) {
             VStack(spacing: 6) {
@@ -657,7 +741,7 @@ struct GaugeCard: View {
                     Text("今週の距離").font(.subheadline.bold())
                     Spacer()
                     if let target {
-                        Text("\((km * 10).rounded() / 10, format: .number) / \(target, format: .number)km 目安")
+                        Text("\((km * 10).rounded() / 10, format: .number) / \(target, format: .number)km 目安\(excludesRace ? "(本番を除く)" : "")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
@@ -681,14 +765,23 @@ struct GaugeCard: View {
 
 struct MenuCard: View {
     @EnvironmentObject private var store: TrackerStore
-    let menuWeek: Int
+    /// 通し週番号(岡山は0〜17、次の目標のプランは18以降)
+    let week: Int
+    let plan: WeekPlan
 
     var body: some View {
-        let plan = Plan.weeks[menuWeek]
-        let counts = store.menuDoneCounts(week: menuWeek)
+        let counts = store.menuDoneCounts(week: week)
 
         VStack(alignment: .leading, spacing: 10) {
-            Text("今週のメニュー").font(.subheadline.bold())
+            HStack {
+                Text("今週のメニュー").font(.subheadline.bold())
+                Spacer()
+                if let goalPlan = store.goalPlan, let number = goalPlan.number(of: week) {
+                    Text("第\(number)週 / \(goalPlan.count)週・\(Plan.phases[plan.phase])")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
             ForEach(Array(doneFlags(plan: plan, counts: counts).enumerated()), id: \.offset) { _, item in
                 HStack(spacing: 10) {
                     Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
@@ -937,12 +1030,7 @@ struct CalendarCard: View {
     }
 
     /// プランの週は W1〜W18、レース後は週の月曜の日付
-    private func weekLabel(_ week: Int) -> String {
-        if week < Plan.weeks.count { return "W\(week + 1)" }
-        let monday = store.weekDates(week)[0]
-        let c = Plan.calendar.dateComponents([.month, .day], from: monday)
-        return "\(c.month ?? 0)/\(c.day ?? 0)"
-    }
+    private func weekLabel(_ week: Int) -> String { store.weekLabel(week) }
 
     @ViewBuilder
     private func dayCell(_ day: Date) -> some View {

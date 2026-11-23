@@ -7,13 +7,39 @@ struct DistanceChartCard: View {
     @EnvironmentObject private var store: TrackerStore
     @State private var selectedX: String?
 
+    /// 表示する週(古い順)。既定は岡山の18週。レース後の週には目標距離がない
+    var weeks: [Int] = Array(0..<Plan.weeks.count)
+
+    private var isPlan: Bool { weeks.allSatisfy { $0 < Plan.weeks.count } }
+
+    /// 目安距離がある週(岡山の18週か、次の目標のプラン期間)
+    private func hasTarget(_ week: Int) -> Bool {
+        isPlan || store.weekPlan(of: week) != nil
+    }
+
     private var currentWeek: Int {
         store.weekIndex(of: Plan.calendar.startOfDay(for: Date()))
     }
-    private var stats: [WeekStat] { store.weekStats }
+    private var stats: [WeekStat] { weeks.map { store.stat(week: $0) } }
     private var selected: WeekStat? {
         guard let x = selectedX else { return nil }
-        return stats.first { $0.label == x }
+        return stats.first { store.weekLabel($0.week) == x }
+    }
+
+    /// 横軸のラベルは先頭・1/3・2/3・末尾の4つだけ出す(全部出すと重なる)
+    private var axisLabels: [String] {
+        guard !weeks.isEmpty else { return [] }
+        let last = weeks.count - 1
+        let picks = [0, last / 3, last * 2 / 3, last]
+        var seen = Set<Int>()
+        return picks.filter { seen.insert($0).inserted }.map { store.weekLabel(weeks[$0]) }
+    }
+
+    /// 18週は岡山の累計、レース後は表示した週の合計
+    private var totalText: String {
+        if isPlan { return "累計 \(Format.km(store.planSummary.km))km" }
+        let km = stats.map(\.actualKm).reduce(0, +)
+        return "合計 \(Format.km((km * 10).rounded() / 10))km"
     }
 
     var body: some View {
@@ -21,8 +47,7 @@ struct DistanceChartCard: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("週別の走行距離").font(.subheadline.bold())
                 Spacer()
-                // レース後の記録を混ぜず、18週の合計を出す
-                Text("累計 \(Format.km(store.planSummary.km))km")
+                Text(totalText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -38,17 +63,20 @@ struct DistanceChartCard: View {
             Chart {
                 ForEach(stats) { stat in
                     BarMark(
-                        x: .value("週", stat.label),
+                        x: .value("週", store.weekLabel(stat.week)),
                         y: .value("実績", stat.actualKm),
                         width: .ratio(0.68)
                     )
-                    .foregroundStyle(phaseColor(stat.phase).opacity(stat.week == currentWeek ? 1 : 0.7))
+                    // プラン外のレース後の週はフェーズがないので1色
+                    .foregroundStyle((hasTarget(stat.week) ? phaseColor(stat.phase) : Color.teal)
+                        .opacity(stat.week == currentWeek ? 1 : 0.7))
                     .cornerRadius(2)
                 }
 
-                ForEach(stats) { stat in
+                // 岡山の18週と、次の目標のプラン期間の週だけ目標線を引く
+                ForEach(stats.filter { hasTarget($0.week) }) { stat in
                     LineMark(
-                        x: .value("週", stat.label),
+                        x: .value("週", store.weekLabel(stat.week)),
                         y: .value("目標", stat.targetKm),
                         series: .value("系列", "target")
                     )
@@ -58,7 +86,7 @@ struct DistanceChartCard: View {
                 }
 
                 if let selected {
-                    RuleMark(x: .value("週", selected.label))
+                    RuleMark(x: .value("週", store.weekLabel(selected.week)))
                         .foregroundStyle(Color.primary.opacity(0.2))
                         .lineStyle(StrokeStyle(lineWidth: 1))
                         .zIndex(-1)
@@ -67,7 +95,7 @@ struct DistanceChartCard: View {
             .chartXSelection(value: $selectedX)
             .chartLegend(.hidden)
             .chartXAxis {
-                AxisMarks(values: ["W1", "W6", "W12", "W18"]) { value in
+                AxisMarks(values: axisLabels) { value in
                     AxisValueLabel {
                         if let w = value.as(String.self) {
                             // fixedSize がないと右端の W18 が "..." に切り詰められる
@@ -90,7 +118,10 @@ struct DistanceChartCard: View {
 
             // chartXSelection は横ドラッグで反応する(縦ドラッグは ScrollView に流れる)。
             // タップでは選択されないので「なぞる」と案内する
-            Text("棒=実績(色はフェーズ) / 破線=目標。横になぞると週ごとの詳細")
+            Text(isPlan ? "棒=実績(色はフェーズ) / 破線=目標。横になぞると週ごとの詳細"
+                 : stats.contains(where: { hasTarget($0.week) })
+                    ? "横軸は週の月曜日。破線=次の目標のプランの目安。横になぞると週ごとの詳細"
+                    : "横軸は週の月曜日。横になぞると週ごとの詳細")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -103,7 +134,11 @@ struct DistanceChartCard: View {
     /// イージーラン中心のプランでは平均が常に目標より遅くなるため。
     private var detailText: String {
         if let s = selected {
-            var text = "\(s.label)  \(Format.km(s.actualKm)) / \(Format.km(s.targetKm))km"
+            let label = store.weekLabel(s.week)
+            // 目安との比較は練習分。本番の距離は別に添える
+            var text = hasTarget(s.week) ? "\(label)  \(Format.km(s.trainingKm)) / \(Format.km(s.targetKm))km"
+                                         : "\(label)の週  \(Format.km(s.actualKm))km"
+            if hasTarget(s.week), s.raceKm > 0 { text += " +本番\(Format.km(s.raceKm))km" }
             if let pace = s.paceSecPerKm { text += "  \(Format.pace(pace))" }
             return text
         }
